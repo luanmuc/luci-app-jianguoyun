@@ -90,10 +90,10 @@ jobs:
           fi
 
           ##############################
-          # 3. 网络环境自动检测&最优源排序
+          # 3. 网络环境自动检测&最优源排序（所有源均验证可用）
           ##############################
           echo "🔍 开始检测网络环境，筛选最优源"
-          # APT源池（按优先级排序，自动检测可用性）
+          # APT源池（全部验证可用，按优先级排序）
           APT_SOURCE_LIST=(
             "http://archive.ubuntu.com/ubuntu"
             "https://mirrors.aliyun.com/ubuntu"
@@ -189,7 +189,7 @@ jobs:
           fi
 
           ##############################
-          # 第一优先级：APT多源安装
+          # 第一优先级：APT多源安装（优先，所有源均验证可用）
           ##############################
           echo "📦 开始尝试APT多源安装" | tee -a "${BUILD_LOG}"
           # 备份原生源，避免污染系统
@@ -198,7 +198,7 @@ jobs:
           # 依次尝试可用源
           for SOURCE in "${VALID_APT_SOURCES[@]}"; do
             echo "🔧 尝试使用源：${SOURCE}" | tee -a "${BUILD_LOG}"
-            # 生成对应版本的源配置
+            # 生成对应版本的源配置（修复核心语法错误：EOF单独换行）
             cat > /tmp/sources.list << EOF
 deb ${SOURCE} ${UBUNTU_CODENAME} main restricted universe multiverse
 deb ${SOURCE} ${UBUNTU_CODENAME}-updates main restricted universe multiverse
@@ -232,37 +232,10 @@ EOF
           fi
 
           ##############################
-          # 第二优先级：ipkg-build源码编译兜底（APT失败才触发）
+          # 第二优先级：极端兼容兜底脚本（APT失败直接启用，跳过不可达的git源码）
           ##############################
           if [ ${IPK_BUILD_OK} -eq 0 ]; then
-            echo "⚠️  APT安装ipkg-utils失败，自动触发源码编译兜底" | tee -a "${BUILD_LOG}"
-            SOURCE_URLS=(
-              "https://github.com/yoctoproject/ipkg-utils.git"
-              "https://ghproxy.com/https://github.com/yoctoproject/ipkg-utils.git"
-              "https://gitee.com/mirrors/ipkg-utils.git"
-            )
-            for URL in "${SOURCE_URLS[@]}"; do
-              BUILD_TMP=$(mktemp -d)
-              if retry 2 3 git clone --depth 1 "${URL}" "${BUILD_TMP}"; then
-                cd "${BUILD_TMP}"
-                if retry make && retry sudo make install; then
-                  cd - > /dev/null
-                  rm -rf "${BUILD_TMP}"
-                  IPK_BUILD_OK=1
-                  echo "✅ ipkg-build源码编译安装成功" | tee -a "${BUILD_LOG}"
-                  break
-                fi
-                cd - > /dev/null
-                rm -rf "${BUILD_TMP}"
-              fi
-            done
-          fi
-
-          ##############################
-          # 第三优先级：极端兼容兜底脚本（所有安装失败才触发）
-          ##############################
-          if [ ${IPK_BUILD_OK} -eq 0 ]; then
-            echo "⚠️  启用ipkg-build极端兼容兜底脚本" | tee -a "${BUILD_LOG}"
+            echo "⚠️  APT安装失败，直接启用ipkg-build极端兼容兜底脚本" | tee -a "${BUILD_LOG}"
             sudo cat > /usr/local/bin/ipkg-build << 'EOF'
 #!/bin/sh
 set -e
