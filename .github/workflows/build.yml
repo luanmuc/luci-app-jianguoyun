@@ -1,1 +1,259 @@
+name: 坚果云插件自动云编译打包
+on:
+  push:
+    branches: [ main ]
+  release:
+    types: [ published ]
+  workflow_dispatch:
 
+# 解决权限不足问题，允许上传产物
+permissions: write-all
+
+jobs:
+  build:
+    name: 全格式打包（IPK+APK）
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        name: 检出仓库代码
+
+      - name: 前置校验：检查核心文件结构
+        run: |
+          echo "🔍 检查核心文件是否存在"
+          if [ ! -d "./root" ]; then
+            echo "❌ 错误：root文件夹不存在，终止构建"
+            exit 1
+          fi
+          # 检查核心文件
+          REQUIRED_FILES=(
+            "./root/etc/config/jianguoyun"
+            "./root/usr/bin/jianguoyun-backup.sh"
+            "./root/usr/lib/lua/luci/controller/jianguoyun.lua"
+            "./root/usr/lib/lua/luci/model/cbi/jianguoyun.lua"
+          )
+          for FILE in "${REQUIRED_FILES[@]}"; do
+            if [ ! -f "$FILE" ]; then
+              echo "❌ 错误：核心文件 $FILE 不存在"
+              exit 1
+            fi
+          done
+          echo "✅ 核心文件校验通过，开始打包"
+
+      - name: 安装打包依赖工具（修复核心依赖缺失问题）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential apk-tools ipkg-utils
+          echo "✅ 所有依赖安装完成"
+          # 校验核心命令是否存在
+          which ipkg-build
+          which apk
+
+      - name: 创建打包输出目录
+        run: mkdir -p output
+
+      - name: 生成通用标准IPK包
+        run: |
+          # 创建IPK临时目录
+          BUILD_DIR=$(mktemp -d)
+          # 复制插件文件
+          cp -r ./root/* $BUILD_DIR/
+          # 创建IPK控制目录
+          mkdir -p $BUILD_DIR/CONTROL
+          # 生成control控制文件
+          cat > $BUILD_DIR/CONTROL/control << EOF
+Package: luci-app-jianguoyun
+Version: 1.1.0
+Architecture: all
+Section: luci
+Priority: optional
+Title: LuCI support for Jianguoyun Backup
+Description: 坚果云WebDAV备份与恢复插件，全OpenWrt版本通用
+Maintainer: 自动打包
+Depends: curl, wget, luci-base
+EOF
+          # 设置权限
+          chmod 755 $BUILD_DIR/CONTROL
+          find $BUILD_DIR -type d -exec chmod 755 {} \;
+          find $BUILD_DIR -type f -name "*.sh" -exec chmod 755 {} \;
+          find $BUILD_DIR -type f -name "*.lua" -exec chmod 644 {} \;
+          find $BUILD_DIR -type f -name "*.conf" -exec chmod 644 {} \;
+          # 打包IPK
+          ipkg-build -o root -g root $BUILD_DIR ./output
+          echo "✅ 通用IPK包生成完成"
+
+      - name: 生成CMCC A10主线专属IPK包
+        run: |
+          BUILD_DIR=$(mktemp -d)
+          cp -r ./root/* $BUILD_DIR/
+          mkdir -p $BUILD_DIR/CONTROL
+          mkdir -p $BUILD_DIR/etc/uci-defaults
+          
+          # 注入主线专属预配置
+          cat > $BUILD_DIR/etc/uci-defaults/99_luci-app-jianguoyun-main << EOF
+#!/bin/sh
+uci set jianguoyun.settings.backup_path='/tmp/upload'
+uci set jianguoyun.settings.auto_cycle='7'
+uci set jianguoyun.settings.keep_count='30'
+uci set jianguoyun.settings.timeout='30'
+uci set jianguoyun.settings.retry_count='3'
+uci set jianguoyun.auto.daily_enable='1'
+uci set jianguoyun.auto.daily_keep_days='30'
+uci set jianguoyun.auto.monthly_light_enable='1'
+uci set jianguoyun.auto.monthly_full_enable='0'
+uci set jianguoyun.auto.monthly_keep_count='12'
+uci set jianguoyun.settings.main_version='1'
+uci commit jianguoyun
+/etc/init.d/cron reload 2>/dev/null
+rm -f /tmp/luci-indexcache
+rm -rf /tmp/luci-modulecache/
+exit 0
+EOF
+          
+          # 生成专属control文件
+          cat > $BUILD_DIR/CONTROL/control << EOF
+Package: luci-app-jianguoyun
+Version: 1.1.0
+Architecture: all
+Section: luci
+Priority: optional
+Title: LuCI support for Jianguoyun Backup (CMCC A10专属版)
+Description: 坚果云WebDAV备份与恢复插件，CMCC A10 25.12.0固件专属适配
+Maintainer: 自动打包
+Depends: curl, wget, luci-base
+EOF
+          
+          # 注入安装前版本校验
+          cat > $BUILD_DIR/CONTROL/preinst << EOF
+#!/bin/sh
+set +e
+FW_VERSION=\$(cat /etc/openwrt_release 2>/dev/null | grep -Po 'DISTRIB_RELEASE=\K.*' | tr -d "'")
+if [ "\$FW_VERSION" != "25.12.0" ]; then
+  echo "⚠️  警告：此为CMCC A10 25.12.0专属版本，当前系统版本不匹配，建议使用通用版"
+fi
+exit 0
+EOF
+          
+          # 设置权限
+          chmod 755 $BUILD_DIR/CONTROL/preinst
+          chmod 755 $BUILD_DIR/etc/uci-defaults/99_luci-app-jianguoyun-main
+          find $BUILD_DIR -type d -exec chmod 755 {} \;
+          find $BUILD_DIR -type f -name "*.sh" -exec chmod 755 {} \;
+          
+          # 打包专属IPK并重命名
+          ipkg-build -o root -g root $BUILD_DIR ./output
+          ORIGIN_PKG=$(ls ./output/luci-app-jianguoyun_*.ipk | tail -n 1)
+          cp -f "$ORIGIN_PKG" ./output/坚果云插件-CMCC-A10专属版.ipk
+          echo "✅ CMCC A10专属IPK包生成完成"
+
+      - name: 生成通用标准APK包
+        run: |
+          BUILD_DIR=$(mktemp -d)
+          cp -r ./root/* $BUILD_DIR/
+          # 创建APK控制信息
+          cat > $BUILD_DIR/.PKGINFO << EOF
+pkgname = luci-app-jianguoyun
+pkgver = 1.1.0
+arch = all
+origin = luci-app-jianguoyun
+description = 坚果云WebDAV备份与恢复插件，全OpenWrt版本通用
+url = 
+maintainer = 自动打包
+license = GPL-2.0
+provides = luci-app-jianguoyun
+depend = curl, wget, luci-base
+EOF
+          # 设置权限
+          find $BUILD_DIR -type d -exec chmod 755 {} \;
+          find $BUILD_DIR -type f -name "*.sh" -exec chmod 755 {} \;
+          # 打包APK（修复兼容性问题）
+          apk build --allow-untrusted --output ./output "$BUILD_DIR"
+          echo "✅ 通用APK包生成完成"
+
+      - name: 生成CMCC A10主线专属APK包
+        run: |
+          BUILD_DIR=$(mktemp -d)
+          cp -r ./root/* $BUILD_DIR/
+          mkdir -p $BUILD_DIR/etc/uci-defaults
+          
+          # 注入主线专属预配置
+          cat > $BUILD_DIR/etc/uci-defaults/99_luci-app-jianguoyun-main << EOF
+#!/bin/sh
+uci set jianguoyun.settings.backup_path='/tmp/upload'
+uci set jianguoyun.settings.auto_cycle='7'
+uci set jianguoyun.settings.keep_count='30'
+uci set jianguoyun.settings.timeout='30'
+uci set jianguoyun.settings.retry_count='3'
+uci set jianguoyun.auto.daily_enable='1'
+uci set jianguoyun.auto.daily_keep_days='30'
+uci set jianguoyun.auto.monthly_light_enable='1'
+uci set jianguoyun.auto.monthly_full_enable='0'
+uci set jianguoyun.auto.monthly_keep_count='12'
+uci set jianguoyun.settings.main_version='1'
+uci commit jianguoyun
+/etc/init.d/cron reload 2>/dev/null
+rm -f /tmp/luci-indexcache
+rm -rf /tmp/luci-modulecache/
+exit 0
+EOF
+          
+          # 生成APK控制信息
+          cat > $BUILD_DIR/.PKGINFO << EOF
+pkgname = luci-app-jianguoyun
+pkgver = 1.1.0
+arch = all
+origin = luci-app-jianguoyun
+description = 坚果云WebDAV备份与恢复插件，CMCC A10 25.12.0固件专属适配
+url = 
+maintainer = 自动打包
+license = GPL-2.0
+provides = luci-app-jianguoyun
+depend = curl, wget, luci-base
+EOF
+          
+          # 注入安装前校验
+          cat > $BUILD_DIR/.pre-install << EOF
+#!/bin/sh
+set +e
+FW_VERSION=\$(cat /etc/openwrt_release 2>/dev/null | grep -Po 'DISTRIB_RELEASE=\K.*' | tr -d "'")
+if [ "\$FW_VERSION" != "25.12.0" ]; then
+  echo "⚠️  警告：此为CMCC A10 25.12.0专属版本，当前系统版本不匹配，建议使用通用版"
+fi
+exit 0
+EOF
+          
+          # 设置权限
+          chmod 755 $BUILD_DIR/.pre-install
+          chmod 755 $BUILD_DIR/etc/uci-defaults/99_luci-app-jianguoyun-main
+          find $BUILD_DIR -type d -exec chmod 755 {} \;
+          find $BUILD_DIR -type f -name "*.sh" -exec chmod 755 {} \;
+          
+          # 打包专属APK并重命名（修复兼容性问题）
+          apk build --allow-untrusted --output ./output "$BUILD_DIR"
+          ORIGIN_PKG=$(ls ./output/luci-app-jianguoyun_*.apk | tail -n 1)
+          cp -f "$ORIGIN_PKG" ./output/坚果云插件-CMCC-A10专属版.apk
+          echo "✅ CMCC A10专属APK包生成完成"
+
+      - name: 最终打包结果校验
+        run: |
+          echo "🎉 所有安装包生成完成，列表如下："
+          ls -l ./output/
+          # 校验核心包是否生成
+          if ls ./output/luci-app-jianguoyun_*.ipk 1> /dev/null 2>&1 && ls ./output/luci-app-jianguoyun_*.apk 1> /dev/null 2>&1; then
+            echo "✅ 核心包校验通过"
+          else
+            echo "❌ 核心包生成失败"
+            exit 1
+          fi
+
+      - name: 上传打包产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: 坚果云插件-全格式安装包
+          path: ./output/*
+
+      - name: 发布到Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ./output/*
