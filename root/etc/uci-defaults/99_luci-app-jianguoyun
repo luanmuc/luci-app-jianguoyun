@@ -1,35 +1,40 @@
 #!/bin/sh
 set +e
 
-# 坚果云插件安装默认配置
-# 严格遵循18条核心主线，含CMCC A10主线专属预配置
-
-# 基础配置默认值
+#########################################################################
+# 【砍掉的优化全合并】CMCC A10专属开箱即用预配置
+#########################################################################
 uci set jianguoyun.settings.backup_path='/tmp/upload'
 uci set jianguoyun.settings.auto_cycle='7'
 uci set jianguoyun.settings.keep_count='30'
 uci set jianguoyun.settings.timeout='30'
 uci set jianguoyun.settings.retry_count='3'
-
-# 定时备份默认配置
 uci set jianguoyun.auto.daily_enable='1'
 uci set jianguoyun.auto.daily_keep_days='30'
-uci set jianguoyun.auto.monthly_light_enable='1'
-uci set jianguoyun.auto.monthly_full_enable='0'
-uci set jianguoyun.auto.monthly_keep_count='12'
-
-# 备份内容固定配置
-uci set jianguoyun.backup_content.light_backup_paths='/etc/config /etc/opkg/keys /usr/lib/opkg/status'
-uci set jianguoyun.backup_content.full_backup_extra='/usr/lib/lua/luci/model/cbi/jianguoyun /usr/lib/lua/luci/controller/jianguoyun /usr/bin/jianguoyun-backup.sh /etc/config/jianguoyun /etc/uci-defaults/99_luci-app-jianguoyun'
-
-# 提交配置
 uci commit jianguoyun
 
-# 重载定时任务
-/etc/init.d/cron reload 2>/dev/null
+#########################################################################
+# 【砍掉的优化全合并】自动修复文件权限&换行符
+#########################################################################
+# 修复脚本执行权限
+chmod 755 /usr/bin/jianguoyun-backup.sh 2>/dev/null
+# 修复LuCI界面文件权限
+chmod 644 /usr/lib/lua/luci/controller/jianguoyun.lua 2>/dev/null
+chmod 644 /usr/lib/lua/luci/model/cbi/jianguoyun.lua 2>/dev/null
+# 修复配置文件权限
+chmod 644 /etc/config/jianguoyun 2>/dev/null
+# 修复定时任务文件权限
+chmod 600 /etc/crontabs/root 2>/dev/null
+# 自动修复所有文件的Windows换行符
+sed -i 's/\r$//' /usr/bin/jianguoyun-backup.sh 2>/dev/null
+sed -i 's/\r$//' /etc/crontabs/root 2>/dev/null
 
-# 清理LuCI缓存
-rm -f /tmp/luci-indexcache
-rm -rf /tmp/luci-modulecache/
+#########################################################################
+# 【砍掉的优化全合并】刷新LuCI界面&定时任务
+#########################################################################
+/etc/init.d/cron enable 2>/dev/null
+/etc/init.d/cron restart 2>/dev/null
+rm -f /tmp/luci-indexcache 2>/dev/null
+rm -rf /tmp/luci-modulecache/ 2>/dev/null
 
 exit 0
