@@ -1,59 +1,46 @@
-name: luci-app-jianguoyun 自动打包
+name: 自动编译坚果云插件安装包
 on:
   push:
     branches: [ main ]
+  release:
+    types: [ published ]
   workflow_dispatch:
 
 jobs:
   build:
+    name: 编译 OpenWrt ${{ matrix.version }} ${{ matrix.arch }} 架构
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        version: [ "23.05.5", "25.12.0" ]
+        arch:
+          - aarch64_cortex-a53
+          - arm_cortex-a7_neon-vfpv4
+          - mipsel_24kc
+          - x86_64
     steps:
-      - name: 拉取仓库代码
+      - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 安装打包工具
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ipkg-utils build-essential
+      - name: 初始化OpenWrt SDK编译环境
+        uses: openwrt/gh-action-sdk@main
+        env:
+          ARCH: ${{ matrix.arch }}-${{ matrix.version }}
+          FEEDNAME: packages_ci
+          PACKAGES: luci-app-jianguoyun
+          NO_REFRESH_CHECK: true
 
-      - name: 打包生成IPK
-        run: |
-          # 创建临时打包目录
-          BUILD_DIR=$(mktemp -d)
-          # 复制插件文件
-          cp -r ./root/* $BUILD_DIR/
-          mkdir -p $BUILD_DIR/CONTROL
-          
-          # 生成插件控制文件
-          cat > $BUILD_DIR/CONTROL/control << EOF
-Package: luci-app-jianguoyun
-Version: 1.0.0
-Architecture: all
-Section: luci
-Priority: optional
-Title: LuCI for Jianguoyun Backup
-Description: 坚果云WebDAV备份插件
-Depends: curl, wget, luci-base
-Maintainer: 自动打包
-EOF
-
-          # 设置文件权限
-          chmod 755 $BUILD_DIR/CONTROL
-          find $BUILD_DIR -type d -exec chmod 755 {} \;
-          find $BUILD_DIR -name "*.sh" -exec chmod 755 {} \;
-          find $BUILD_DIR -name "*.lua" -exec chmod 644 {} \;
-
-          # 生成IPK文件
-          OUTPUT_DIR=$GITHUB_WORKSPACE/output
-          mkdir -p $OUTPUT_DIR
-          ipkg-build -o root -g root $BUILD_DIR $OUTPUT_DIR
-
-          # 清理临时文件
-          rm -rf $BUILD_DIR
-
-      - name: 上传安装包
+      - name: 上传编译完成的安装包
         uses: actions/upload-artifact@v4
         with:
-          name: luci-app-jianguoyun-安装包
-          path: output/*
-          retention-days: 30
+          name: luci-app-jianguoyun-${{ matrix.version }}-${{ matrix.arch }}
+          path: bin/packages/${{ matrix.arch }}/packages_ci/*.ipk
+          if-no-files-found: error
+
+      - name: 发布安装包到Release
+        uses: softprops/action-gh-release@v2
+        if: github.event_name == 'release'
+        with:
+          files: bin/packages/${{ matrix.arch }}/packages_ci/*.ipk
+          fail_on_unmatched_files: true
