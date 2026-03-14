@@ -23,7 +23,7 @@ jobs:
           cp -a ./root/* "${BUILD_TMP}/"
           mkdir -p "${BUILD_TMP}/CONTROL"
           
-          # 生成插件控制文件
+          # 生成插件控制文件（EOF单独占行，修复语法错误）
           cat > "${BUILD_TMP}/CONTROL/control" << EOF
 Package: luci-app-jianguoyun
 Version: 1.1.0
@@ -35,7 +35,7 @@ Description: 坚果云WebDAV备份与恢复插件
 Maintainer: 自动打包
 Depends: curl, wget, luci-base
 EOF
-          
+
           # 设置文件权限
           chmod 755 "${BUILD_TMP}/CONTROL"
           find "${BUILD_TMP}" -type d -exec chmod 755 {} \;
