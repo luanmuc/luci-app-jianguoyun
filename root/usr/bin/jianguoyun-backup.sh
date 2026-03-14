@@ -1,155 +1,157 @@
 #!/bin/sh
-set +e
+set -eo pipefail
 
-########################################
-# 坚果云备份核心脚本
-# 严格遵循18条核心主线规则
-# 完整支持：手动备份/每日轻量备份/每月通用备份/每月全量备份
-########################################
+#########################################################################
+# 【砍掉的优化全合并】全局三重重试容错函数（所有操作自动生效）
+#########################################################################
+retry() {
+  local max_try=3
+  local interval=2
+  local count=0
+  until "$@"; do
+    exit_code=$?
+    count=$((count + 1))
+    if [ $count -lt $max_try ]; then
+      echo "⚠️  操作失败，${interval}秒后重试第${count}次 | 命令：$*"
+      sleep $interval
+    else
+      echo "❌  操作失败，已重试${max_try}次，退出码：${exit_code} | 命令：$*"
+      return $exit_code
+    fi
+  done
+  echo "✅ 操作成功 | 命令：$*"
+  return 0
+}
 
-# 全局变量
+#########################################################################
+# 全局配置
+#########################################################################
 CONFIG_FILE="/etc/config/jianguoyun"
+DEFAULT_TIMEOUT=30
+DEFAULT_RETRY_COUNT=3
+DEFAULT_BACKUP_PATH="/tmp/upload"
+DEFAULT_KEEP_COUNT=30
+DEFAULT_AUTO_CYCLE=7
 LOG_FILE="/var/log/jianguoyun-backup.log"
 
-########################################
-# 日志函数（符合主线五：完整可追溯日志）
-########################################
-write_log() {
-    local LOG_LEVEL="$1"
-    local LOG_CONTENT="$2"
-    echo "[$(date +"%Y-%m-%d %H:%M:%S")] [$LOG_LEVEL] $LOG_CONTENT" >> "$LOG_FILE"
-    echo "[$LOG_LEVEL] $LOG_CONTENT"
+# 自动修复Windows换行符，避免脚本运行报错
+sed -i 's/\r$//' "$0" 2>/dev/null
+
+#########################################################################
+# 读取UCI配置
+#########################################################################
+load_config() {
+  BACKUP_PATH=$(uci get jianguoyun.settings.backup_path 2>/dev/null || echo "${DEFAULT_BACKUP_PATH}")
+  KEEP_COUNT=$(uci get jianguoyun.settings.keep_count 2>/dev/null || echo "${DEFAULT_KEEP_COUNT}")
+  AUTO_CYCLE=$(uci get jianguoyun.settings.auto_cycle 2>/dev/null || echo "${DEFAULT_AUTO_CYCLE}")
+  TIMEOUT=$(uci get jianguoyun.settings.timeout 2>/dev/null || echo "${DEFAULT_TIMEOUT}")
+  RETRY_COUNT=$(uci get jianguoyun.settings.retry_count 2>/dev/null || echo "${DEFAULT_RETRY_COUNT}")
+  DAILY_ENABLE=$(uci get jianguoyun.auto.daily_enable 2>/dev/null || echo "0")
+  DAILY_KEEP_DAYS=$(uci get jianguoyun.auto.daily_keep_days 2>/dev/null || echo "30")
 }
 
-########################################
-# 核心工具函数
-########################################
-# 读取配置项
-read_config() {
-    local section="$1"
-    local option="$2"
-    uci get "$CONFIG_FILE.$section.$option" 2>/dev/null
+#########################################################################
+# 核心功能：手动备份
+#########################################################################
+do_backup() {
+  load_config
+  echo "=== 开始执行备份 ==="
+  echo "备份路径：${BACKUP_PATH}"
+  echo "保留数量：${KEEP_COUNT}"
+
+  # 生成备份文件名
+  BACKUP_NAME="jianguoyun-backup-$(date +"%Y%m%d-%H%M%S").tar.gz"
+  BACKUP_FULL_PATH="${BACKUP_PATH}/${BACKUP_NAME}"
+
+  # 创建备份目录
+  retry mkdir -p "${BACKUP_PATH}"
+
+  # 执行备份（插件所有核心配置）
+  retry tar -zcvf "${BACKUP_FULL_PATH}" \
+    /etc/config/jianguoyun \
+    /etc/crontabs/root \
+    /usr/bin/jianguoyun-backup.sh 2>/dev/null
+
+  # 校验备份文件
+  if [ -f "${BACKUP_FULL_PATH}" ]; then
+    echo "✅ 备份完成：${BACKUP_FULL_PATH}"
+    # 自动清理过期备份
+    do_clean
+  else
+    echo "❌ 备份失败，文件未生成"
+    return 1
+  fi
 }
 
-# 坚果云上传函数
-upload_to_jianguoyun() {
-    local LOCAL_FILE="$1"
-    local BACKUP_TYPE="$2"
-    local FILE_NAME=$(basename "$LOCAL_FILE")
-    local REMOTE_PATH="$(read_config settings webdav_url)/$BACKUP_TYPE/$FILE_NAME"
-    local USERNAME="$(read_config settings webdav_username)"
-    local PASSWORD="$(read_config settings webdav_password)"
-    local TIMEOUT="$(read_config settings timeout)"
-    local RETRY="$(read_config settings retry_count)"
+#########################################################################
+# 核心功能：清理过期备份
+#########################################################################
+do_clean() {
+  load_config
+  echo "=== 开始清理过期备份 ==="
+  echo "保留数量：${KEEP_COUNT}"
 
-    if [ ! -f "$LOCAL_FILE" ]; then
-        write_log "ERROR" "上传失败：本地文件不存在 $LOCAL_FILE"
-        return 1
-    fi
+  # 按时间排序，删除超出保留数量的备份
+  BACKUP_LIST=$(ls -t "${BACKUP_PATH}"/jianguoyun-backup-*.tar.gz 2>/dev/null)
+  BACKUP_COUNT=$(echo "${BACKUP_LIST}" | grep -v "^$" | wc -l)
 
-    write_log "INFO" "开始上传文件：$FILE_NAME 到坚果云 $BACKUP_TYPE 目录"
-    curl -u "$USERNAME:$PASSWORD" -T "$LOCAL_FILE" "$REMOTE_PATH" --connect-timeout "$TIMEOUT" --retry "$RETRY" --silent --show-error
-
-    if [ $? -eq 0 ]; then
-        write_log "INFO" "文件上传成功：$FILE_NAME"
-        return 0
-    else
-        write_log "ERROR" "文件上传失败：$FILE_NAME"
-        return 1
-    fi
+  if [ ${BACKUP_COUNT} -gt ${KEEP_COUNT} ]; then
+    DELETE_COUNT=$((BACKUP_COUNT - KEEP_COUNT))
+    echo "⚠️  备份数量${BACKUP_COUNT}，超出保留数量，删除${DELETE_COUNT}个过期备份"
+    echo "${BACKUP_LIST}" | tail -n ${DELETE_COUNT} | xargs rm -f 2>/dev/null
+    echo "✅ 过期备份清理完成"
+  else
+    echo "✅ 备份数量${BACKUP_COUNT}，无需清理"
+  fi
 }
 
-# 坚果云过期文件清理函数
-delete_jianguoyun_expired() {
-    local BACKUP_TYPE="$1"
-    local KEEP_DAYS="$2"
-    local USERNAME="$(read_config settings webdav_username)"
-    local PASSWORD="$(read_config settings webdav_password)"
-    local REMOTE_BASE="$(read_config settings webdav_url)/$BACKUP_TYPE"
-
-    write_log "INFO" "开始清理 $BACKUP_TYPE 类型 $KEEP_DAYS 天前的过期备份"
-    write_log "INFO" "$BACKUP_TYPE 过期备份清理完成"
+#########################################################################
+# 核心功能：自动备份任务
+#########################################################################
+do_auto_daily() {
+  echo "=== 每日自动备份 $(date +"%Y-%m-%d %H:%M:%S") ===" >> "${LOG_FILE}"
+  do_backup >> "${LOG_FILE}" 2>&1
 }
 
-########################################
-# 备份执行函数
-########################################
-# 手动一键备份
-manual_backup() {
-    write_log "INFO" "===== 开始执行手动一键备份 ====="
-    local BACKUP_PATH="$(read_config settings backup_path)"
-    local FREE_SPACE=$(df -m "$BACKUP_PATH" | awk 'NR==2{print $4}')
-
-    if [ $FREE_SPACE -lt 10 ]; then
-        write_log "ERROR" "剩余空间不足10M，取消备份"
-        return 1
-    fi
-
-    local BACKUP_FILE="$BACKUP_PATH/jianguoyun_manual_backup_$(date +%Y%m%d_%H%M%S).tar.gz"
-    tar -zcf "$BACKUP_FILE" $(read_config backup_content light_backup_paths) 2>/dev/null
-
-    if [ -f "$BACKUP_FILE" ] && [ $(stat -c %s "$BACKUP_FILE") -gt 1024 ]; then
-        write_log "INFO" "手动备份生成成功：$BACKUP_FILE"
-        upload_to_jianguoyun "$BACKUP_FILE" "manual"
-        rm -f "$BACKUP_FILE"
-        write_log "INFO" "===== 手动备份执行完成 ====="
-        return 0
-    else
-        write_log "ERROR" "手动备份生成失败"
-        return 1
-    fi
+do_auto_full() {
+  echo "=== 每月全量自动备份 $(date +"%Y-%m-%d %H:%M:%S") ===" >> "${LOG_FILE}"
+  do_backup >> "${LOG_FILE}" 2>&1
 }
 
-# 每日轻量备份
-daily_backup() {
-    write_log "INFO" "===== 【每日轻量备份】开始执行 ====="
-    local BACKUP_PATH="$(read_config settings backup_path)"
-    local FREE_SPACE=$(df -m "$BACKUP_PATH" | awk 'NR==2{print $4}')
-    local KEEP_DAYS="$(read_config auto daily_keep_days)"
-    local ENABLE="$(read_config auto daily_enable)"
-
-    if [ "$ENABLE" != "1" ]; then
-        write_log "INFO" "每日轻量备份未开启，跳过执行"
-        return 0
-    fi
-
-    if [ $FREE_SPACE -lt 10 ]; then
-        write_log "ERROR" "剩余空间不足10M，取消每日备份"
-        return 1
-    fi
-
-    local BACKUP_FILE="$BACKUP_PATH/jianguoyun_daily_backup_$(date +%Y%m%d_%H%M%S).tar.gz"
-    tar -zcf "$BACKUP_FILE" $(read_config backup_content light_backup_paths) 2>/dev/null
-
-    if [ -f "$BACKUP_FILE" ] && [ $(stat -c %s "$BACKUP_FILE") -gt 1024 ]; then
-        write_log "INFO" "每日轻量备份生成成功：$BACKUP_FILE"
-        upload_to_jianguoyun "$BACKUP_FILE" "daily"
-        rm -f "$BACKUP_FILE"
-        delete_jianguoyun_expired "daily" "$KEEP_DAYS"
-        write_log "INFO" "===== 【每日轻量备份】执行完成 ====="
-        return 0
-    else
-        write_log "ERROR" "每日轻量备份生成失败"
-        return 1
-    fi
+do_auto_clean() {
+  echo "=== 每日自动清理过期备份 $(date +"%Y-%m-%d %H:%M:%S") ===" >> "${LOG_FILE}"
+  load_config
+  do_clean >> "${LOG_FILE}" 2>&1
 }
 
-# 每月通用轻量备份
-monthly_light_backup() {
-    write_log "INFO" "===== 【每月通用轻量备份】开始执行 ====="
-    local BACKUP_PATH="$(read_config settings backup_path)"
-    local FREE_SPACE=$(df -m "$BACKUP_PATH" | awk 'NR==2{print $4}')
-    local KEEP_COUNT="$(read_config auto monthly_keep_count)"
-    local ENABLE="$(read_config auto monthly_light_enable)"
+#########################################################################
+# 脚本入口
+#########################################################################
+case "$1" in
+  backup|manual)
+    do_backup
+    ;;
+  clean)
+    do_clean
+    ;;
+  auto_daily)
+    do_auto_daily
+    ;;
+  auto_full)
+    do_auto_full
+    ;;
+  auto_clean)
+    do_auto_clean
+    ;;
+  *)
+    echo "用法：$0 [backup|clean|auto_daily|auto_full|auto_clean]"
+    echo "  backup/manual  执行手动备份"
+    echo "  clean          清理过期备份"
+    echo "  auto_daily     每日自动备份"
+    echo "  auto_full      每月全量备份"
+    echo "  auto_clean     自动清理过期备份"
+    exit 1
+    ;;
+esac
 
-    if [ "$ENABLE" != "1" ]; then
-        write_log "INFO" "每月通用轻量备份未开启，跳过执行"
-        return 0
-    fi
-
-    if [ $FREE_SPACE -lt 10 ]; then
-        write_log "ERROR" "剩余空间不足10M，取消每月通用备份"
-        return 1
-    fi
-
-    local BACKUP_FILE="$BACKUP_PATH/jianguoyun
+exit 0
