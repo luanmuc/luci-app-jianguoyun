@@ -1,0 +1,7 @@
+# 坚果云备份定时任务
+# 每日凌晨2点执行每日轻量备份
+0 2 * * * /usr/bin/jianguoyun-backup.sh daily_backup
+# 每月1号凌晨3点执行每月通用轻量备份
+0 3 1 * * /usr/bin/jianguoyun-backup.sh monthly_light_backup
+# 每月1号凌晨4点执行每月全量备份（开关开启才会真正执行）
+0 4 1 * * /usr/bin/jianguoyun-backup.sh monthly_full_backup
