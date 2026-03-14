@@ -1,4 +1,4 @@
-name: 坚果云插件18主线对齐·全自动打包发布
+name: 坚果云插件全自动打包发布
 on:
   push:
     branches: [ main ]
@@ -14,166 +14,117 @@ env:
   OUTPUT_DIR: "${{ github.workspace }}/output"
   BUILD_LOG: "${{ github.workspace }}/build-full.log"
   DEFAULT_VERSION: "1.1.0"
-  APT_SOURCE_LIST: |
-    http://archive.ubuntu.com/ubuntu
-    https://mirrors.aliyun.com/ubuntu
-    https://mirrors.tuna.tsinghua.edu.cn/ubuntu
-    https://mirrors.ustc.edu.cn/ubuntu
-    https://mirrors.huaweicloud.com/ubuntu
+  APT_SOURCES: "http://archive.ubuntu.com/ubuntu https://mirrors.aliyun.com/ubuntu https://mirrors.tuna.tsinghua.edu.cn/ubuntu"
   CORE_MODULES: "1,2,3,4,5,6,7,8,9,10,11,12,13"
-  OPTIONAL_MODULES: "14,15,16,17,18"
 
 jobs:
   build:
-    name: 18主线对齐·插件全链路打包
+    name: 插件全链路打包
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 12
     steps:
-      - name: 【1/8 前置准备】拉取插件代码
+      - name: 拉取插件代码
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           clean: true
 
-      - name: 【1/8 前置准备】全局环境初始化
+      - name: 全局环境初始化
         id: init_env
         run: |
           set -eo pipefail
+          # 全局三重重试函数
           retry() {
             local retries=${1:-3}
             local interval=${2:-2}
             shift 2
             local count=0
-            local exit_code=0
             until "$@"; do
-              exit_code=$?
               count=$((count + 1))
               if [ $count -lt $retries ]; then
-                echo "⚠️  命令执行失败，${interval}秒后重试第${count}次 | 命令：$*"
+                echo "⚠️  重试第${count}次 | 命令：$*"
                 sleep $interval
               else
-                echo "❌  命令执行失败，已重试${retries}次，退出码：${exit_code} | 命令：$*"
-                return $exit_code
+                echo "❌  命令执行失败 | 命令：$*"
+                return 1
               fi
             done
             echo "✅ 命令执行成功 | 命令：$*"
             return 0
           }
-          UBUNTU_CODENAME=$(lsb_release -cs 2>/dev/null || echo "noble")
-          REPO_NAME="${GITHUB_REPOSITORY##*/}"
+          # 版本号处理
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             RELEASE_VERSION=${GITHUB_REF#refs/tags/v}
-            if ! [[ "${RELEASE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              RELEASE_VERSION="${{ env.DEFAULT_VERSION }}"
-            fi
+            [[ ! "${RELEASE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && RELEASE_VERSION="${{ env.DEFAULT_VERSION }}"
             IS_RELEASE=1
           else
             RELEASE_VERSION="${{ env.DEFAULT_VERSION }}"
             IS_RELEASE=0
           fi
-          echo "🔍 开始检测网络环境，筛选最优源"
-          VALID_APT_SOURCES=()
-          while IFS= read -r SOURCE; do
-            [ -z "$SOURCE" ] && continue
-            if curl -s --connect-timeout 3 --max-time 5 "$SOURCE/dists/$UBUNTU_CODENAME/Release" > /dev/null 2>&1; then
-              VALID_APT_SOURCES+=("$SOURCE")
-              echo "✅ 可用源：$SOURCE"
-            else
-              echo "⚠️  源不可达，自动跳过：$SOURCE"
-            fi
-          done <<< "${{ env.APT_SOURCE_LIST }}"
-          if [ ${#VALID_APT_SOURCES[@]} -eq 0 ]; then
-            VALID_APT_SOURCES=("http://archive.ubuntu.com/ubuntu")
-          fi
+          # 初始化目录和日志
           retry mkdir -p "${{ env.OUTPUT_DIR }}"
-          echo "=====================================" > "${{ env.BUILD_LOG }}"
-          echo "坚果云插件18主线对齐打包日志" >> "${{ env.BUILD_LOG }}"
+          echo "=== 坚果云插件打包日志 ===" > "${{ env.BUILD_LOG }}"
           echo "打包时间：$(date +"%Y-%m-%d %H:%M:%S")" >> "${{ env.BUILD_LOG }}"
           echo "版本号：v${RELEASE_VERSION}" >> "${{ env.BUILD_LOG }}"
-          echo "=====================================" >> "${{ env.BUILD_LOG }}"
+          # 导出全局变量
           echo "retry=$(declare -f retry)" >> "${GITHUB_ENV}"
-          echo "UBUNTU_CODENAME=${UBUNTU_CODENAME}" >> "${GITHUB_ENV}"
-          echo "REPO_NAME=${REPO_NAME}" >> "${GITHUB_ENV}"
-          echo "VALID_APT_SOURCES=${VALID_APT_SOURCES[*]}" >> "${GITHUB_ENV}"
           echo "RELEASE_VERSION=${RELEASE_VERSION}" >> "${GITHUB_ENV}"
           echo "IS_RELEASE=${IS_RELEASE}" >> "${GITHUB_ENV}"
           echo "status=success" >> "${GITHUB_OUTPUT}"
           echo "🎉 全局环境初始化完成" | tee -a "${{ env.BUILD_LOG }}"
 
-      - name: 【1/8 前置准备】全局缓存配置
+      - name: 全局缓存配置
         if: steps.init_env.outputs.status == 'success'
         uses: actions/cache@v4
         with:
           path: |
             /var/cache/apt/archives
             /usr/local/bin/ipkg-build
-            /usr/local/bin/apk
           key: ${{ runner.os }}-luci-jianguoyun-${{ hashFiles('**/root/**') }}
           restore-keys: |
             ${{ runner.os }}-luci-jianguoyun-
 
-      - name: 【2/8 依赖安装】打包工具多源兜底安装
+      - name: 打包工具安装
         id: install_deps
         if: steps.init_env.outputs.status == 'success'
         run: |
           source <(echo "$retry")
-          echo "🔧 开始安装核心打包工具" | tee -a "${{ env.BUILD_LOG }}"
-          IPK_BUILD_OK=0
-          APK_BUILD_OK=0
+          echo "🔧 开始安装打包工具" | tee -a "${{ env.BUILD_LOG }}"
+          # 检测已安装工具
           if which ipkg-build > /dev/null 2>&1; then
-            IPK_BUILD_OK=1
             echo "✅ ipkg-build已存在，跳过安装" | tee -a "${{ env.BUILD_LOG }}"
-          fi
-          if which apk > /dev/null 2>&1; then
-            APK_BUILD_OK=1
-            echo "✅ apk已存在，跳过安装" | tee -a "${{ env.BUILD_LOG }}"
-          fi
-          if [ ${IPK_BUILD_OK} -eq 1 ] && [ ${APK_BUILD_OK} -eq 1 ]; then
-            echo "✅ 所有核心工具已就绪" | tee -a "${{ env.BUILD_LOG }}"
             echo "status=success" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
-          echo "📦 开始尝试APT多源安装" | tee -a "${{ env.BUILD_LOG }}"
+          # APT多源安装
           retry sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
           APT_INSTALL_OK=0
-          IFS=' ' read -r -a VALID_APT_SOURCES <<< "${VALID_APT_SOURCES}"
-          for SOURCE in "${VALID_APT_SOURCES[@]}"; do
-            echo "🔧 尝试使用源：${SOURCE}" | tee -a "${{ env.BUILD_LOG }}"
+          for SOURCE in ${{ env.APT_SOURCES }}; do
+            echo "🔧 尝试源：${SOURCE}" | tee -a "${{ env.BUILD_LOG }}"
             cat > /tmp/sources.list << EOF
-deb ${SOURCE} ${UBUNTU_CODENAME} main restricted universe multiverse
-deb ${SOURCE} ${UBUNTU_CODENAME}-updates main restricted universe multiverse
-deb ${SOURCE} ${UBUNTU_CODENAME}-security main restricted universe multiverse
-deb ${SOURCE} ${UBUNTU_CODENAME}-backports main restricted universe multiverse
+deb ${SOURCE} noble main restricted universe multiverse
+deb ${SOURCE} noble-updates main restricted universe multiverse
+deb ${SOURCE} noble-security main restricted universe multiverse
 EOF
             retry sudo cp /tmp/sources.list /etc/apt/sources.list
             if retry 3 5 sudo apt-get update -o Acquire::ConnectTimeout=5 -qq; then
-              INSTALL_PACKAGES=""
-              [ ${IPK_BUILD_OK} -eq 0 ] && INSTALL_PACKAGES="${INSTALL_PACKAGES} ipkg-utils build-essential"
-              [ ${APK_BUILD_OK} -eq 0 ] && INSTALL_PACKAGES="${INSTALL_PACKAGES} apk-tools"
-              if retry 3 5 sudo apt-get install -y -qq --fix-missing ${INSTALL_PACKAGES}; then
-                echo "✅ APT安装成功，源：${SOURCE}" | tee -a "${{ env.BUILD_LOG }}"
+              if retry 3 5 sudo apt-get install -y -qq --fix-missing ipkg-utils build-essential; then
+                echo "✅ 工具安装成功" | tee -a "${{ env.BUILD_LOG }}"
                 APT_INSTALL_OK=1
                 break
               fi
             fi
           done
           retry sudo cp /etc/apt/sources.list.bak /etc/apt/sources.list
-          if [ ${APT_INSTALL_OK} -eq 1 ]; then
-            echo "✅ 所有核心工具安装完成" | tee -a "${{ env.BUILD_LOG }}"
-            echo "status=success" >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
-          if [ ${IPK_BUILD_OK} -eq 0 ]; then
-            echo "⚠️  APT安装失败，启用ipkg-build兼容兜底脚本" | tee -a "${{ env.BUILD_LOG }}"
+          # 兼容兜底脚本
+          if [ $APT_INSTALL_OK -eq 0 ]; then
+            echo "⚠️  APT安装失败，启用兼容兜底脚本" | tee -a "${{ env.BUILD_LOG }}"
             sudo cat > /usr/local/bin/ipkg-build << 'EOF'
 #!/bin/sh
 set -e
 usage() { echo "用法：$0 [选项] 打包目录 输出目录"; exit 1; }
 while getopts "o:g:c:" opt; do
-  case $opt in
-    o|g|c) ;;
-    *) usage ;;
-  esac
+  case $opt in o|g|c) ;; *) usage ;; esac
 done
 shift $((OPTIND - 1))
 BUILD_DIR="$1"
@@ -194,26 +145,24 @@ rm -rf "$TMP_DIR"
 echo "✅ 兼容模式IPK生成成功：$OUTPUT_FILE"
 EOF
             sudo chmod 755 /usr/local/bin/ipkg-build
-            IPK_BUILD_OK=1
           fi
+          # 最终校验
           if which ipkg-build > /dev/null 2>&1; then
-            echo "✅ 核心IPK打包工具就绪" | tee -a "${{ env.BUILD_LOG }}"
+            echo "✅ 核心打包工具就绪" | tee -a "${{ env.BUILD_LOG }}"
             echo "status=success" >> "${GITHUB_OUTPUT}"
           else
-            echo "❌ IPK打包工具安装失败" | tee -a "${{ env.BUILD_LOG }}"
+            echo "❌ 打包工具安装失败" | tee -a "${{ env.BUILD_LOG }}"
             echo "status=failure" >> "${GITHUB_OUTPUT}"
             exit 1
           fi
-          if ! which apk > /dev/null 2>&1; then
-            echo "⚠️  APK工具不可用，自动跳过APK打包" | tee -a "${{ env.BUILD_LOG }}"
-          fi
 
-      - name: 【3/8 18主线校验】模块分级合规性检查
+      - name: 18主线模块校验
         id: check_modules
         if: steps.install_deps.outputs.status == 'success'
         run: |
           source <(echo "$retry")
-          echo "🔍 开始18主线模块分级校验" | tee -a "${{ env.BUILD_LOG }}"
+          echo "🔍 开始18主线模块校验" | tee -a "${{ env.BUILD_LOG }}"
+          # 18主线模块文件映射
           declare -A MODULE_FILES
           MODULE_FILES[1]="./root/usr/bin/jianguoyun-backup.sh"
           MODULE_FILES[2]="./root/etc/config/jianguoyun"
@@ -233,55 +182,46 @@ EOF
           MODULE_FILES[16]="./CONTROL/preinst"
           MODULE_FILES[17]="./root/usr/bin/jianguoyun-backup.sh"
           MODULE_FILES[18]="./.github/workflows/build.yml"
-          echo "===== 核心模块校验 =====" | tee -a "${{ env.BUILD_LOG }}"
+          # 核心模块强制校验
           IFS=',' read -r -a CORE_LIST <<< "${{ env.CORE_MODULES }}"
           CORE_CHECK_PASS=1
           for MODULE_ID in "${CORE_LIST[@]}"; do
             FILE_PATH=${MODULE_FILES[$MODULE_ID]}
             if [ ! -f "$FILE_PATH" ]; then
-              echo "❌ 致命错误：${MODULE_ID}号核心模块文件缺失 $FILE_PATH" | tee -a "${{ env.BUILD_LOG }}"
+              echo "❌ 核心模块${MODULE_ID}文件缺失：$FILE_PATH" | tee -a "${{ env.BUILD_LOG }}"
               CORE_CHECK_PASS=0
             else
               sed -i 's/\r$//' "$FILE_PATH" 2>/dev/null
               if [[ "$FILE_PATH" == *.sh ]]; then
                 if bash -n "$FILE_PATH"; then
-                  echo "✅ ${MODULE_ID}号核心模块校验通过" | tee -a "${{ env.BUILD_LOG }}"
+                  echo "✅ 核心模块${MODULE_ID}校验通过" | tee -a "${{ env.BUILD_LOG }}"
                 else
-                  echo "❌ 致命错误：${MODULE_ID}号核心模块脚本语法错误" | tee -a "${{ env.BUILD_LOG }}"
+                  echo "❌ 核心模块${MODULE_ID}脚本语法错误" | tee -a "${{ env.BUILD_LOG }}"
                   CORE_CHECK_PASS=0
                 fi
               else
-                echo "✅ ${MODULE_ID}号核心模块校验通过" | tee -a "${{ env.BUILD_LOG }}"
+                echo "✅ 核心模块${MODULE_ID}校验通过" | tee -a "${{ env.BUILD_LOG }}"
               fi
             fi
           done
+          # 校验结果处理
           if [ $CORE_CHECK_PASS -eq 0 ]; then
             echo "❌ 核心模块校验失败，终止打包" | tee -a "${{ env.BUILD_LOG }}"
             exit 1
           fi
-          echo "===== 扩展模块校验 =====" | tee -a "${{ env.BUILD_LOG }}"
-          IFS=',' read -r -a OPTIONAL_LIST <<< "${{ env.OPTIONAL_MODULES }}"
-          for MODULE_ID in "${OPTIONAL_LIST[@]}"; do
-            FILE_PATH=${MODULE_FILES[$MODULE_ID]}
-            if [ ! -f "$FILE_PATH" ]; then
-              echo "⚠️  警告：${MODULE_ID}号扩展模块文件缺失，自动跳过" | tee -a "${{ env.BUILD_LOG }}"
-            else
-              sed -i 's/\r$//' "$FILE_PATH" 2>/dev/null
-              echo "✅ ${MODULE_ID}号扩展模块校验通过" | tee -a "${{ env.BUILD_LOG }}"
-            fi
-          done
-          echo "🎉 18主线模块分级校验全部通过" | tee -a "${{ env.BUILD_LOG }}"
+          echo "🎉 18主线模块校验全部通过" | tee -a "${{ env.BUILD_LOG }}"
           echo "status=success" >> "${GITHUB_OUTPUT}"
 
-      - name: 【4/8 核心打包】通用标准IPK生成
-        id: main_ipk_build
+      - name: 通用IPK打包
+        id: main_build
         if: steps.check_modules.outputs.status == 'success'
         run: |
           source <(echo "$retry")
-          echo "📦 开始生成通用标准IPK包" | tee -a "${{ env.BUILD_LOG }}"
+          echo "📦 开始生成通用IPK包" | tee -a "${{ env.BUILD_LOG }}"
           BUILD_TMP=$(mktemp -d)
           retry cp -a ./root/* "${BUILD_TMP}/"
           retry mkdir -p "${BUILD_TMP}/CONTROL"
+          # 生成control文件
           cat > "${BUILD_TMP}/CONTROL/control" << EOF
 Package: luci-app-jianguoyun
 Version: ${RELEASE_VERSION}
@@ -289,35 +229,35 @@ Architecture: all
 Section: luci
 Priority: optional
 Title: LuCI support for Jianguoyun Backup
-Description: 坚果云WebDAV备份与恢复插件，18主线对齐版
+Description: 坚果云WebDAV备份与恢复插件
 Maintainer: 自动打包
 Depends: curl, wget, luci-base
 EOF
+          # 权限设置
           chmod 755 "${BUILD_TMP}/CONTROL" 2>/dev/null
           find "${BUILD_TMP}" -type d -exec chmod 755 {} \; 2>/dev/null
           find "${BUILD_TMP}" -type f -name "*.sh" -exec chmod 755 {} \; 2>/dev/null
           find "${BUILD_TMP}" -type f -name "*.lua" -exec chmod 644 {} \; 2>/dev/null
+          # 打包
           PACKAGE_OK=0
           BUILD_PARAMS=(
             "-o root -g root ${BUILD_TMP} ${{ env.OUTPUT_DIR }}"
             "${BUILD_TMP} ${{ env.OUTPUT_DIR }}"
-            "-c ${BUILD_TMP} ${{ env.OUTPUT_DIR }}"
           )
           for PARAMS in "${BUILD_PARAMS[@]}"; do
-            echo "🔧 尝试打包，参数：ipkg-build ${PARAMS}" | tee -a "${{ env.BUILD_LOG }}"
             if retry ipkg-build ${PARAMS}; then
-              echo "✅ 打包成功，参数：ipkg-build ${PARAMS}" | tee -a "${{ env.BUILD_LOG }}"
+              echo "✅ 打包成功" | tee -a "${{ env.BUILD_LOG }}"
               PACKAGE_OK=1
               break
             fi
           done
-          if [ ${PACKAGE_OK} -eq 1 ] && ls "${{ env.OUTPUT_DIR }}/luci-app-jianguoyun_"*.ipk > /dev/null 2>&1; then
+          # 结果处理
+          if [ $PACKAGE_OK -eq 1 ] && ls "${{ env.OUTPUT_DIR }}/luci-app-jianguoyun_"*.ipk > /dev/null 2>&1; then
             ORIGIN_PKG=$(ls "${{ env.OUTPUT_DIR }}/luci-app-jianguoyun_"*.ipk | head -n 1)
-            cp -f "${ORIGIN_PKG}" "${{ env.OUTPUT_DIR }}/luci-app-jianguoyun-18主线通用版-v${RELEASE_VERSION}.ipk"
-            echo "✅ 通用标准IPK包生成完成" | tee -a "${{ env.BUILD_LOG }}"
+            cp -f "${ORIGIN_PKG}" "${{ env.OUTPUT_DIR }}/luci-app-jianguoyun-通用版-v${RELEASE_VERSION}.ipk"
+            echo "✅ 通用IPK包生成完成" | tee -a "${{ env.BUILD_LOG }}"
             echo "status=success" >> "${GITHUB_OUTPUT}"
             rm -rf "${BUILD_TMP}"
-            exit 0
           else
             echo "❌ 通用IPK打包失败" | tee -a "${{ env.BUILD_LOG }}"
             echo "status=failure" >> "${GITHUB_OUTPUT}"
@@ -325,8 +265,8 @@ EOF
             exit 1
           fi
 
-      - name: 【4/8 可选打包】CMCC A10专属IPK生成
-        if: steps.main_ipk_build.outputs.status == 'success'
+      - name: CMCC A10专属IPK打包
+        if: steps.main_build.outputs.status == 'success'
         continue-on-error: true
         run: |
           source <(echo "$retry")
@@ -335,22 +275,19 @@ EOF
           retry cp -a ./root/* "${BUILD_TMP}/"
           retry mkdir -p "${BUILD_TMP}/CONTROL"
           retry mkdir -p "${BUILD_TMP}/etc/uci-defaults"
-          cat > "${BUILD_TMP}/etc/uci-defaults/99_luci-app-jianguoyun-cmcc-a10" << EOF
+          # 注入专属配置
+          cat > "${BUILD_TMP}/etc/uci-defaults/99_luci-app-jianguoyun-cmcc" << EOF
 #!/bin/sh
 set +e
 uci set jianguoyun.settings.backup_path='/tmp/upload'
 uci set jianguoyun.settings.auto_cycle='7'
 uci set jianguoyun.settings.keep_count='30'
-uci set jianguoyun.settings.timeout='30'
-uci set jianguoyun.settings.retry_count='3'
-uci set jianguoyun.auto.daily_enable='1'
-uci set jianguoyun.auto.daily_keep_days='30'
 uci commit jianguoyun
 /etc/init.d/cron reload 2>/dev/null
 rm -f /tmp/luci-indexcache
-rm -rf /tmp/luci-modulecache/
 exit 0
 EOF
+          # 生成control文件
           cat > "${BUILD_TMP}/CONTROL/control" << EOF
 Package: luci-app-jianguoyun
 Version: ${RELEASE_VERSION}
@@ -358,74 +295,70 @@ Architecture: all
 Section: luci
 Priority: optional
 Title: LuCI support for Jianguoyun Backup (CMCC A10专属版)
-Description: 坚果云备份插件，CMCC A10专属适配，18主线对齐版
+Description: 坚果云备份插件，CMCC A10专属适配
 Maintainer: 自动打包
 Depends: curl, wget, luci-base
 EOF
+          # 权限设置
           chmod 755 "${BUILD_TMP}/CONTROL" 2>/dev/null
-          chmod 755 "${BUILD_TMP}/etc/uci-defaults/99_luci-app-jianguoyun-cmcc-a10" 2>/dev/null
+          chmod 755 "${BUILD_TMP}/etc/uci-defaults/99_luci-app-jianguoyun-cmcc" 2>/dev/null
           find "${BUILD_TMP}" -type d -exec chmod 755 {} \; 2>/dev/null
           find "${BUILD_TMP}" -type f -name "*.sh" -exec chmod 755 {} \; 2>/dev/null
+          # 打包
           if retry ipkg-build -o root -g root "${BUILD_TMP}" "${{ env.OUTPUT_DIR }}"; then
             ORIGIN_PKG=$(ls "${{ env.OUTPUT_DIR }}/luci-app-jianguoyun_"*.ipk | tail -n 1)
             cp -f "${ORIGIN_PKG}" "${{ env.OUTPUT_DIR }}/luci-app-jianguoyun-CMCC-A10专属版-v${RELEASE_VERSION}.ipk"
-            echo "✅ CMCC A10专属IPK包生成完成" | tee -a "${{ env.BUILD_LOG }}"
+            echo "✅ CMCC A10专属IPK生成完成" | tee -a "${{ env.BUILD_LOG }}"
           else
-            echo "⚠️  CMCC A10专属IPK打包失败，自动跳过" | tee -a "${{ env.BUILD_LOG }}"
+            echo "⚠️  专属IPK打包失败，自动跳过" | tee -a "${{ env.BUILD_LOG }}"
           fi
           rm -rf "${BUILD_TMP}"
-          exit 0
 
-      - name: 【5/8 发布准备】自动生成版本更新说明
-        id: generate_changelog
-        if: env.IS_RELEASE == '1' && steps.main_ipk_build.outputs.status == 'success'
+      - name: 发布版本更新说明生成
+        id: changelog
+        if: env.IS_RELEASE == '1' && steps.main_build.outputs.status == 'success'
         continue-on-error: true
         run: |
-          echo "📝 开始生成版本更新说明" | tee -a "${{ env.BUILD_LOG }}"
+          echo "📝 生成版本更新说明" | tee -a "${{ env.BUILD_LOG }}"
           CHANGELOG_FILE="${{ env.OUTPUT_DIR }}/版本更新说明-v${RELEASE_VERSION}.md"
           cat > "${CHANGELOG_FILE}" << EOF
-# 坚果云备份插件 v${RELEASE_VERSION} 发布说明（18主线对齐版）
+# 坚果云备份插件 v${RELEASE_VERSION} 发布说明
 发布时间：$(date +"%Y-%m-%d")
-适配设备：全OpenWrt版本通用、CMCC A10专属适配
+适配设备：全OpenWrt通用、CMCC A10专属适配
 
-## 18主线更新内容
-- 全量对齐18条开发主线，完成逻辑性统一排序与模块化分类
-- 新增打包环节模块分级校验，提前拦截语法错误与逻辑问题
-- 全链路容错机制升级，核心功能100%必成
-- 打包发布流程标准化，对齐18号主线规范
+## 更新内容
+- 18主线模块逻辑统一排序与模块化分类
+- 全链路容错机制升级，打包稳定性提升
+- 打包环节新增模块分级校验，提前拦截问题
 
 ## 安装说明
 1.  下载对应版本的IPK安装包
-2.  上传到OpenWrt路由器后台，直接安装
-3.  安装完成后，在「服务」菜单中找到「坚果云备份」
-4.  填写坚果云WebDAV地址、账号、应用密码即可使用
+2.  上传到OpenWrt路由器后台直接安装
+3.  安装完成后在「服务」菜单找到「坚果云备份」
+4.  填写坚果云WebDAV信息即可使用
 EOF
-          echo "✅ 版本更新说明生成完成" | tee -a "${{ env.BUILD_LOG }}"
           echo "changelog_file=${CHANGELOG_FILE}" >> "${GITHUB_OUTPUT}"
-          exit 0
 
-      - name: 【6/8 日志归档】打包日志收尾
+      - name: 日志归档与产物整理
         if: always()
         run: |
-          echo "=====================================" >> "${{ env.BUILD_LOG }}"
-          echo "打包结束：$(date +"%Y-%m-%d %H:%M:%S")" >> "${{ env.BUILD_LOG }}"
-          echo "=====================================" >> "${{ env.BUILD_LOG }}"
+          echo "=== 打包结束：$(date +"%Y-%m-%d %H:%M:%S") ===" >> "${{ env.BUILD_LOG }}"
           cp -f "${{ env.BUILD_LOG }}" "${{ env.OUTPUT_DIR }}/"
-          echo "📦 最终打包产物列表：" | tee -a "${{ env.BUILD_LOG }}"
+          echo "📦 最终产物列表：" | tee -a "${{ env.BUILD_LOG }}"
           ls -l "${{ env.OUTPUT_DIR }}/" | tee -a "${{ env.BUILD_LOG }}"
 
-      - name: 【7/8 产物上传】输出最终安装包
+      - name: 产物上传
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: luci-app-jianguoyun-18主线版-v${{ env.RELEASE_VERSION }}
+          name: luci-app-jianguoyun-安装包-v${{ env.RELEASE_VERSION }}
           path: ${{ env.OUTPUT_DIR }}/*
           retention-days: 30
 
-      - name: 【8/8 自动发布】上传到GitHub Release
-        if: env.IS_RELEASE == '1' && steps.main_ipk_build.outputs.status == 'success'
+      - name: 自动发布到Release
+        if: env.IS_RELEASE == '1' && steps.main_build.outputs.status == 'success'
         uses: softprops/action-gh-release@v2
         with:
-          body_path: ${{ steps.generate_changelog.outputs.changelog_file || env.OUTPUT_DIR }}/版本更新说明-v${{ env.RELEASE_VERSION }}.md
+          body_path: ${{ steps.changelog.outputs.changelog_file || env.OUTPUT_DIR }}/版本更新说明-v${{ env.RELEASE_VERSION }}.md
           files: ${{ env.OUTPUT_DIR }}/*
           fail_on_unmatched_files: false
