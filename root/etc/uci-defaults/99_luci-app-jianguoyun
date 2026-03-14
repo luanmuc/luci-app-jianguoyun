@@ -1,0 +1,35 @@
+#!/bin/sh
+set +e
+
+# 坚果云插件安装默认配置
+# 严格遵循18条核心主线，含CMCC A10主线专属预配置
+
+# 基础配置默认值
+uci set jianguoyun.settings.backup_path='/tmp/upload'
+uci set jianguoyun.settings.auto_cycle='7'
+uci set jianguoyun.settings.keep_count='30'
+uci set jianguoyun.settings.timeout='30'
+uci set jianguoyun.settings.retry_count='3'
+
+# 定时备份默认配置
+uci set jianguoyun.auto.daily_enable='1'
+uci set jianguoyun.auto.daily_keep_days='30'
+uci set jianguoyun.auto.monthly_light_enable='1'
+uci set jianguoyun.auto.monthly_full_enable='0'
+uci set jianguoyun.auto.monthly_keep_count='12'
+
+# 备份内容固定配置
+uci set jianguoyun.backup_content.light_backup_paths='/etc/config /etc/opkg/keys /usr/lib/opkg/status'
+uci set jianguoyun.backup_content.full_backup_extra='/usr/lib/lua/luci/model/cbi/jianguoyun /usr/lib/lua/luci/controller/jianguoyun /usr/bin/jianguoyun-backup.sh /etc/config/jianguoyun /etc/uci-defaults/99_luci-app-jianguoyun'
+
+# 提交配置
+uci commit jianguoyun
+
+# 重载定时任务
+/etc/init.d/cron reload 2>/dev/null
+
+# 清理LuCI缓存
+rm -f /tmp/luci-indexcache
+rm -rf /tmp/luci-modulecache/
+
+exit 0
