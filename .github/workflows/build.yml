@@ -8,55 +8,52 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 拉取插件代码
+      - name: 拉取仓库代码
         uses: actions/checkout@v4
 
       - name: 安装打包工具
         run: |
-          sudo apt-get update -qq
+          sudo apt-get update
           sudo apt-get install -y ipkg-utils build-essential
 
-      - name: 生成IPK安装包
+      - name: 打包生成IPK
         run: |
-          # 准备打包目录
-          BUILD_TMP=$(mktemp -d)
-          cp -a ./root/* "${BUILD_TMP}/"
-          mkdir -p "${BUILD_TMP}/CONTROL"
+          # 创建临时打包目录
+          BUILD_DIR=$(mktemp -d)
+          # 复制插件文件
+          cp -r ./root/* $BUILD_DIR/
+          mkdir -p $BUILD_DIR/CONTROL
           
-          # 生成插件控制文件（EOF单独占行，修复语法错误）
-          cat > "${BUILD_TMP}/CONTROL/control" << EOF
+          # 生成插件控制文件
+          cat > $BUILD_DIR/CONTROL/control << EOF
 Package: luci-app-jianguoyun
-Version: 1.1.0
+Version: 1.0.0
 Architecture: all
 Section: luci
 Priority: optional
-Title: LuCI support for Jianguoyun Backup
-Description: 坚果云WebDAV备份与恢复插件
-Maintainer: 自动打包
+Title: LuCI for Jianguoyun Backup
+Description: 坚果云WebDAV备份插件
 Depends: curl, wget, luci-base
+Maintainer: 自动打包
 EOF
 
           # 设置文件权限
-          chmod 755 "${BUILD_TMP}/CONTROL"
-          find "${BUILD_TMP}" -type d -exec chmod 755 {} \;
-          find "${BUILD_TMP}" -type f -name "*.sh" -exec chmod 755 {} \;
-          find "${BUILD_TMP}" -type f -name "*.lua" -exec chmod 644 {} \;
-          
-          # 打包IPK
-          OUTPUT_DIR="${GITHUB_WORKSPACE}/output"
-          mkdir -p "${OUTPUT_DIR}"
-          ipkg-build -o root -g root "${BUILD_TMP}" "${OUTPUT_DIR}"
-          
-          # 重命名安装包
-          ORIGIN_FILE=$(ls "${OUTPUT_DIR}/luci-app-jianguoyun_"*.ipk | head -n 1)
-          cp -f "${ORIGIN_FILE}" "${OUTPUT_DIR}/luci-app-jianguoyun-通用版.ipk"
-          
-          # 清理临时文件
-          rm -rf "${BUILD_TMP}"
+          chmod 755 $BUILD_DIR/CONTROL
+          find $BUILD_DIR -type d -exec chmod 755 {} \;
+          find $BUILD_DIR -name "*.sh" -exec chmod 755 {} \;
+          find $BUILD_DIR -name "*.lua" -exec chmod 644 {} \;
 
-      - name: 上传打包产物
+          # 生成IPK文件
+          OUTPUT_DIR=$GITHUB_WORKSPACE/output
+          mkdir -p $OUTPUT_DIR
+          ipkg-build -o root -g root $BUILD_DIR $OUTPUT_DIR
+
+          # 清理临时文件
+          rm -rf $BUILD_DIR
+
+      - name: 上传安装包
         uses: actions/upload-artifact@v4
         with:
           name: luci-app-jianguoyun-安装包
-          path: ./output/*
+          path: output/*
           retention-days: 30
