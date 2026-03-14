@@ -1,40 +1,29 @@
 name: luci-app-jianguoyun 自动打包
 on:
-  # 推送代码到main分支自动触发编译
   push:
     branches: [ main ]
-  # 支持手动触发编译
   workflow_dispatch:
 
 jobs:
   build:
-    # 用官方Ubuntu系统，稳定不报错
     runs-on: ubuntu-latest
     steps:
-      # 步骤1：拉取您自己仓库里的所有插件代码（仅拉取当前仓库，无任何外部内容）
-      - name: 拉取仓库插件代码
+      - name: 拉取插件代码
         uses: actions/checkout@v4
 
-      # 步骤2：安装IPK打包工具，仅安装编译必须的依赖
       - name: 安装打包工具
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y ipkg-utils build-essential
 
-      # 步骤3：核心打包流程，全容错兜底，稳定生成IPK
       - name: 生成IPK安装包
         run: |
-          # 创建临时打包目录
+          # 准备打包目录
           BUILD_TMP=$(mktemp -d)
-          
-          # 复制您仓库里的插件核心文件，加容错兜底，文件不存在也不会中断编译
-          cp -a ./root/* "${BUILD_TMP}/" 2>/dev/null || true
-          cp -a ./CONTROL "${BUILD_TMP}/" 2>/dev/null || true
-          
-          # 确保CONTROL目录存在，避免打包失败
+          cp -a ./root/* "${BUILD_TMP}/"
           mkdir -p "${BUILD_TMP}/CONTROL"
           
-          # 生成插件控制文件（IPK必须的核心文件）
+          # 生成插件控制文件
           cat > "${BUILD_TMP}/CONTROL/control" << EOF
 Package: luci-app-jianguoyun
 Version: 1.1.0
@@ -47,34 +36,27 @@ Maintainer: 自动打包
 Depends: curl, wget, luci-base
 EOF
           
-          # 统一设置所有文件权限，加容错兜底，避免权限问题导致安装后用不了
-          chmod 755 "${BUILD_TMP}/CONTROL" 2>/dev/null || true
-          chmod 755 "${BUILD_TMP}/CONTROL/"* 2>/dev/null || true
-          find "${BUILD_TMP}" -type d -exec chmod 755 {} \; 2>/dev/null || true
-          find "${BUILD_TMP}" -type f -name "*.sh" -exec chmod 755 {} \; 2>/dev/null || true
-          find "${BUILD_TMP}" -type f -name "*.lua" -exec chmod 644 {} \; 2>/dev/null || true
-          find "${BUILD_TMP}" -type f -name "config" -exec chmod 644 {} \; 2>/dev/null || true
-          chmod 600 "${BUILD_TMP}/etc/crontabs/root" 2>/dev/null || true
+          # 设置文件权限
+          chmod 755 "${BUILD_TMP}/CONTROL"
+          find "${BUILD_TMP}" -type d -exec chmod 755 {} \;
+          find "${BUILD_TMP}" -type f -name "*.sh" -exec chmod 755 {} \;
+          find "${BUILD_TMP}" -type f -name "*.lua" -exec chmod 644 {} \;
           
-          # 创建输出目录，打包IPK
+          # 打包IPK
           OUTPUT_DIR="${GITHUB_WORKSPACE}/output"
           mkdir -p "${OUTPUT_DIR}"
           ipkg-build -o root -g root "${BUILD_TMP}" "${OUTPUT_DIR}"
           
-          # 重命名安装包，方便您下载识别
-          ORIGIN_FILE=$(ls "${OUTPUT_DIR}/luci-app-jianguoyun_"*.ipk 2>/dev/null | head -n 1)
-          if [ -f "${ORIGIN_FILE}" ]; then
-            cp -f "${ORIGIN_FILE}" "${OUTPUT_DIR}/luci-app-jianguoyun-通用版.ipk"
-          fi
+          # 重命名安装包
+          ORIGIN_FILE=$(ls "${OUTPUT_DIR}/luci-app-jianguoyun_"*.ipk | head -n 1)
+          cp -f "${ORIGIN_FILE}" "${OUTPUT_DIR}/luci-app-jianguoyun-通用版.ipk"
           
           # 清理临时文件
           rm -rf "${BUILD_TMP}"
 
-      # 步骤4：上传打包好的IPK安装包，方便您下载
       - name: 上传打包产物
         uses: actions/upload-artifact@v4
         with:
           name: luci-app-jianguoyun-安装包
           path: ./output/*
-          # 安装包保留30天
           retention-days: 30
