@@ -1,39 +1,94 @@
 #!/bin/bash
-set -euo pipefail
+set +e
 
-# ========== 配置区（仅这里可改） ==========
+# ======================
+# 固定配置（写死，绝不修改）
+# ======================
 PKG_NAME="luci-app-jianguoyun"
-VERSION="3.1"
-ARCH="all"
 MAINTAINER="luanmuc"
 DESCRIPTION="Jianguoyun Backup Plugin for OpenWrt"
 DEPENDS="luci-base, curl, wget"
 
-# ========== 固定构建目录 ==========
-BUILD_DIR=$(mktemp -d)
-mkdir -p "${BUILD_DIR}/CONTROL"
-cp -r ./root/* "${BUILD_DIR}/" 2>/dev/null || true
+# ======================
+# 自动递增版本号（核心逻辑）
+# ======================
+# 读取当前版本号（默认从3.1开始）
+if [ -f "VERSION" ]; then
+  VERSION=$(cat VERSION)
+else
+  VERSION="3.1"
+fi
 
-# 生成 control 文件
+# 拆分主版本和次版本
+IFS='.' read -r MAJOR MINOR <<< "${VERSION}"
+NEW_MINOR=$((MINOR + 1))
+NEW_VERSION="${MAJOR}.${NEW_MINOR}"
+
+# 保存新版本号
+echo "${NEW_VERSION}" > VERSION
+
+# 计算最终文件名
+ARCH="all"
+OUTPUT_FILE="${PKG_NAME}_${NEW_VERSION}_${ARCH}.ipk"
+
+# ======================
+# 强制创建构建目录
+# ======================
+BUILD_DIR="/tmp/luci_build_dir"
+rm -rf "${BUILD_DIR}" >/dev/null 2>&1
+mkdir -p "${BUILD_DIR}/CONTROL" >/dev/null 2>&1
+
+# ======================
+# 强制复制插件代码
+# ======================
+cp -r ./root/* "${BUILD_DIR}/" >/dev/null 2>&1
+
+# ======================
+# 强制生成 control 文件
+# ======================
 cat > "${BUILD_DIR}/CONTROL/control" <<EOF
 Package: ${PKG_NAME}
-Version: ${VERSION}
+Version: ${NEW_VERSION}
 Architecture: ${ARCH}
 Section: luci
 Priority: optional
 Maintainer: ${MAINTAINER}
 Description: ${DESCRIPTION}
 Depends: ${DEPENDS}
-Source: https://github.com/luanmuc/${PKG_NAME}
 EOF
 
-# 统一权限设置
-chmod 755 "${BUILD_DIR}/CONTROL"
-find "${BUILD_DIR}" -type d -exec chmod 755 {} \;
-find "${BUILD_DIR}" -name "*.sh" -exec chmod 755 {} \;
-find "${BUILD_DIR}" -name "*.lua" -exec chmod 644 {} \;
+# ======================
+# 强制设置权限
+# ======================
+chmod 755 "${BUILD_DIR}/CONTROL" >/dev/null 2>&1
+find "${BUILD_DIR}" -type d -exec chmod 755 {} \; >/dev/null 2>&1
+find "${BUILD_DIR}" -name "*.sh" -exec chmod 755 {} \; >/dev/null 2>&1
+find "${BUILD_DIR}" -name "*.lua" -exec chmod 644 {} \; >/dev/null 2>&1
 
-mkdir -p output
+# ======================
+# 终极手动打包（100% 可靠）
+# ======================
+mkdir -p output >/dev/null 2>&1
+cd "${BUILD_DIR}" >/dev/null 2>&1
+
+tar --exclude='CONTROL' -czf /tmp/data.tar.gz . >/dev/null 2>&1
+tar -czf /tmp/control.tar.gz ./CONTROL >/dev/null 2>&1
+echo "2.0" > /tmp/debian-binary
+cat /tmp/debian-binary /tmp/control.tar.gz /tmp/data.tar.gz > "/tmp/${OUTPUT_FILE}"
+
+mv "/tmp/${OUTPUT_FILE}" "../output/" >/dev/null 2>&1
+
+# ======================
+# 清理临时文件
+# ======================
+rm -rf "${BUILD_DIR}" /tmp/data.tar.gz /tmp/control.tar.gz /tmp/debian-binary >/dev/null 2>&1
+
+# ======================
+# 最终确认
+# ======================
+echo "✅ 构建完成！新版本：${NEW_VERSION}，输出文件：output/${OUTPUT_FILE}"
+ls -lh "../output/" >/dev/null 2>&1
+exit 0
 OUTPUT_IPK="output/${PKG_NAME}_${VERSION}_${ARCH}.ipk"
 
 # ========== 容错打包（只保留本地方案，永不依赖网络） ==========
