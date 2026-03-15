@@ -1,0 +1,26 @@
+#!/bin/bash
+set -e
+
+BUILD_DIR=$(mktemp -d)
+mkdir -p "${BUILD_DIR}/CONTROL"
+cp -r ./root/* "${BUILD_DIR}/"
+
+cat > "${BUILD_DIR}/CONTROL/control" <<EOF
+Package: luci-app-jianguoyun
+Version: 3.1
+Architecture: all
+Section: luci
+Priority: optional
+Maintainer: luanmuc
+Description: Jianguoyun Backup Plugin for OpenWrt
+Depends: luci-base, curl, wget
+EOF
+
+chmod 755 "${BUILD_DIR}/CONTROL"
+
+find "${BUILD_DIR}" -type d -exec chmod 755 {} \;
+find "${BUILD_DIR}" -name "*.sh" -exec chmod 755 {} \;
+find "${BUILD_DIR}" -name "*.lua" -exec chmod 644 {} \;
+
+mkdir -p output
+ipkg-build -o root -g root "${BUILD_DIR}" output/
