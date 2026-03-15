@@ -1,47 +1,24 @@
 name: 编译坚果云备份插件
+
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: 拉取代码
         uses: actions/checkout@v4
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ipkg-utils build-essential
+      - name: 安装依赖
+        run: sudo apt-get update && sudo apt-get install -y ipkg-utils build-essential
 
-      - name: Build IPK
-        run: |
-          BUILD_DIR=$(mktemp -d)
-          mkdir -p "${BUILD_DIR}/CONTROL"
-          cp -r ./root/* "${BUILD_DIR}/"
+      - name: 执行构建脚本
+        run: chmod +x scripts/build.sh && ./scripts/build.sh
 
-          cat > "${BUILD_DIR}/CONTROL/control" << EOF
-Package: luci-app-jianguoyun
-Version: 3.1
-Architecture: all
-Section: luci
-Priority: optional
-Maintainer: luanmuc
-Description: Jianguoyun Backup Plugin for OpenWrt
-Depends: luci-base, curl, wget
-          EOF
-          chmod 755 "${BUILD_DIR}/CONTROL"
-          find "${BUILD_DIR}" -type d -exec chmod 755 {} \;
-          find "${BUILD_DIR}" -name "*.sh" -exec chmod 755 {} \;
-          find "${BUILD_DIR}" -name "*.lua" -exec chmod 644 {} \;
-
-          mkdir -p output
-          ipkg-build -o root -g root "${BUILD_DIR}" output/
-
-      - name: Upload artifact
+      - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
           name: luci-app-jianguoyun
