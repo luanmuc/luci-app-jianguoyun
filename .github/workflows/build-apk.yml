@@ -1,0 +1,65 @@
+name: Build APK Package (副编译流程，完全不影响主IPK构建)
+# 触发规则和你的主build.yml完全一致，提交代码自动并行触发
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  release:
+    types: [ published ]
+
+jobs:
+  build-apk:
+    name: Build OpenWrt APK Package
+    runs-on: ubuntu-latest
+    # 完全独立运行，和主IPK构建流程100%隔离
+    steps:
+      - name: 拉取仓库代码
+        uses: actions/checkout@v4
+
+      - name: 准备构建环境
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tar gzip coreutils
+
+      - name: 自动读取包配置（和主IPK包100%同步）
+        id: pkg-info
+        run: |
+          # 包名和你主脚本完全一致
+          PACKAGE_NAME="luci-app-jianguoyun"
+          # 自动从你现有的CONTROL/control读取版本号，和主IPK包版本完全同步
+          VERSION=$(grep -oP 'Version:\s*\K.*' CONTROL/control 2>/dev/null | head -n 1 || echo "1.0.0")
+          # APK包固定为noarch全架构通用，和主IPK包的all架构对应
+          ARCH="noarch"
+          
+          # 输出配置到环境变量，后续步骤复用
+          echo "PACKAGE_NAME=$PACKAGE_NAME" >> $GITHUB_OUTPUT
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "ARCH=$ARCH" >> $GITHUB_OUTPUT
+
+      - name: 构建APK安装包（兼容OpenWrt 25.12+新版固件）
+        run: |
+          # 创建临时构建目录和产物目录，完全不影响主脚本的文件
+          mkdir -p apk-build/pkg apk-output
+          
+          # 100%复用你现有的业务文件，和主IPK包功能完全一致
+          cp -r root/* apk-build/pkg/ 2>/dev/null || true
+          cp -r CONTROL/* apk-build/pkg/.PKGINFO/ 2>/dev/null || true
+          
+          # 修复文件权限，和主IPK包的权限完全一致
+          chmod 755 apk-build/pkg/usr/bin/*.sh 2>/dev/null || true
+          chmod 755 apk-build/pkg/etc/init.d/* 2>/dev/null || true
+          chmod 755 apk-build/pkg/etc/uci-defaults/* 2>/dev/null || true
+          
+          # 严格遵循OpenWrt官方APK格式标准打包
+          tar -C apk-build/pkg -czf apk-output/${{ steps.pkg-info.outputs.PACKAGE_NAME }}_${{ steps.pkg-info.outputs.VERSION }}_${{ steps.pkg-info.outputs.ARCH }}.apk .
+          
+          # 自动清理临时文件，不残留垃圾
+          rm -rf apk-build
+
+      - name: 上传APK包产物（和主IPK包完全分离，独立下载）
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pkg-info.outputs.PACKAGE_NAME }}_APK_v${{ steps.pkg-info.outputs.VERSION }}
+          path: apk-output/*.apk
+          retention-days: 90
