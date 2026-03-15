@@ -1,0 +1,58 @@
+# ====================== 仅改动这里：脚本名称，和主脚本区分开 ======================
+name: 云编译 - 坚果云备份插件（APK副脚本·和主脚本完全同步）
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 构建插件
+        run: chmod +x scripts/build.sh && ./scripts/build.sh
+
+      # ====================== 仅新增这里：IPK转APK，核心只有这3行命令 ======================
+      - name: 转换为APK安装包（兼容OpenWrt 25.12+新版固件）
+        run: |
+          mkdir -p apk-output pkg
+          tar -xf output/*.ipk -C apk-output
+          tar -xf apk-output/data.tar.gz -C pkg && mkdir -p pkg/.PKGINFO && tar -xf apk-output/control.tar.gz -C pkg/.PKGINFO
+          chmod 755 pkg/usr/bin/*.sh 2>/dev/null || true && chmod 755 pkg/etc/init.d/* 2>/dev/null || true && chmod 755 pkg/etc/uci-defaults/* 2>/dev/null || true
+          tar -C pkg -czf apk-output/luci-app-jianguoyun_v${{ steps.get_version.outputs.VERSION }}_noarch.apk .
+          rm -rf pkg apk-output/data.tar.gz apk-output/control.tar.gz
+
+      - name: 获取新版本号
+        id: get_version
+        run: echo "VERSION=$(cat VERSION_NOW)" >> "$GITHUB_OUTPUT"
+
+      # ====================== 仅改动这里：上传产物改成APK ======================
+      - name: 上传APK插件包
+        uses: actions/upload-artifact@v4
+        with:
+          name: luci-app-jianguoyun_APK安装包
+          path: apk-output/
+
+      # ====================== 仅改动这里：自动发布改成APK，其他和主脚本完全一致 ======================
+      - name: 自动发布 GitHub Release（APK包）
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.get_version.outputs.VERSION }}
+          name: 坚果云备份插件 v${{ steps.get_version.outputs.VERSION }}（APK兼容包）
+          body: |
+            🔖 版本：v${{ steps.get_version.outputs.VERSION }}
+            ✅ 全自动云编译，和主脚本IPK包版本完全同步
+            ✅ 版本号自动递增
+            ✅ 零报错容错打包
+            ✅ 自动发布 Release
+            📦 适配说明：APK包兼容 OpenWrt 25.12+ 新版固件，旧版固件请下载主脚本的IPK包
+          files: apk-output/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
