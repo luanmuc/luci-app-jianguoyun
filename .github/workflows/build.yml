@@ -32,7 +32,6 @@ Priority: optional
 Maintainer: luanmuc
 Description: Jianguoyun Backup Plugin for OpenWrt
 Depends: luci-base, curl, wget
-
 EOF
 
           chmod 755 "${BUILD_DIR}/CONTROL"
