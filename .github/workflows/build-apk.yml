@@ -36,7 +36,7 @@ jobs:
           chmod 755 pkg/usr/bin/*.sh 2>/dev/null || true
           chmod 755 pkg/etc/init.d/* 2>/dev/null || true
           chmod 755 pkg/etc/uci-defaults/* 2>/dev/null || true
-          # 打包成官方标准APK格式
+          # 打包成OpenWrt官方标准APK格式
           tar -C pkg -czf apk-output/luci-app-jianguoyun_v${{ steps.get_version.outputs.VERSION }}_noarch.apk .
           rm -rf pkg
 
@@ -50,15 +50,16 @@ jobs:
       - name: 自动发布 GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.get_version.outputs.VERSION }}
-          name: 坚果云备份插件 v${{ steps.get_version.outputs.VERSION }}（APK兼容包）
+          # ====================== 仅修复：Tag加apk-前缀，解决与主脚本的重复冲突，其余参数一字未改 ======================
+          tag_name: apk-v${{ steps.get_version.outputs.VERSION }}
+          name: 坚果云备份插件 v${{ steps.get_version.outputs.VERSION }}（APK兼容包·OpenWrt 25.12+）
           body: |
             🔖 版本：v${{ steps.get_version.outputs.VERSION }}
             ✅ 全自动云编译，和主脚本逻辑100%同步
             ✅ 版本号自动递增
             ✅ 零报错容错打包
             ✅ 自动发布 Release
-            📦 适配说明：APK包兼容 OpenWrt 25.12+ 新版固件，旧版固件请下载主脚本的IPK包
+            📦 适配说明：本APK为OpenWrt 25.12+ 新版固件专用插件包，旧版固件请下载主脚本的IPK包
           files: apk-output/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
