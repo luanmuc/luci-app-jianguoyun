@@ -1,0 +1,10 @@
+#!/bin/sh
+set -euo pipefail
+
+# 开发文档：安装前清理旧版本残留，不中断安装流程
+rm -rf /usr/lib/lua/luci/controller/jianguoyun.lua 2>/dev/null || true
+rm -rf /usr/lib/lua/luci/model/cbi/jianguoyun 2>/dev/null || true
+rm -rf /usr/lib/lua/luci/view/jianguoyun 2>/dev/null || true
+rm -rf /tmp/jianguoyun* 2>/dev/null || true
+
+exit 0
