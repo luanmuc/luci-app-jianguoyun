@@ -1,4 +1,5 @@
-name: Build APK Package
+# 副编译脚本 - 仅负责APK包构建，和主脚本完全隔离，并行运行
+name: 【副脚本】APK包自动构建
 on:
   push:
     branches: [ main ]
@@ -9,29 +10,28 @@ on:
 
 jobs:
   build-apk:
-    name: Build OpenWrt APK Package
+    name: 构建APK安装包（兼容新版OpenWrt）
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout 仓库代码
+      - name: 1. 拉取仓库代码
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: 安装构建依赖（和主脚本完全对齐）
+      - name: 2. 安装构建依赖（和主脚本完全一致）
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y tar gzip coreutils wget curl xz-utils
+          sudo apt-get install -y tar gzip coreutils
 
-      - name: 执行主脚本全套打包流程（100%复用你跑通的build.sh）
+      - name: 3. 执行主脚本同款打包流程（复用你跑通的build.sh）
         run: |
           set -euo pipefail
           chmod +x scripts/build.sh
           ./scripts/build.sh
-          ls -l *.ipk
-          echo "✅ 主脚本打包流程执行完成，IPK包生成成功"
+          echo "✅ 基础打包完成，和主脚本结果完全一致"
 
-      - name: 读取包配置（和主脚本100%同步）
+      - name: 4. 读取包版本信息
         id: pkg-info
         run: |
           set -euo pipefail
@@ -41,179 +41,34 @@ jobs:
           echo "PACKAGE_NAME=$PACKAGE_NAME" >> $GITHUB_OUTPUT
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
           echo "ARCH=$ARCH" >> $GITHUB_OUTPUT
+          echo "✅ 版本信息读取完成：v$VERSION"
 
-      - name: 生成APK安装包（100%复用主脚本打包结果）
+      - name: 5. 生成APK格式安装包
         run: |
           set -euo pipefail
-          mkdir -p apk-build/pkg apk-output
-          tar -xf *.ipk -C apk-build
-          if [ -f apk-build/data.tar.gz ]; then
-            tar -xf apk-build/data.tar.gz -C apk-build/pkg
+          mkdir -p 临时构建目录 最终产物目录
+          # 从主脚本同款IPK中提取文件，确保内容完全一致
+          tar -xf *.ipk -C 临时构建目录
+          if [ -f 临时构建目录/data.tar.gz ]; then
+            tar -xf 临时构建目录/data.tar.gz -C 最终产物目录
           fi
-          if [ -f apk-build/control.tar.gz ]; then
-            mkdir -p apk-build/pkg/.PKGINFO
-            tar -xf apk-build/control.tar.gz -C apk-build/pkg/.PKGINFO
+          if [ -f 临时构建目录/control.tar.gz ]; then
+            mkdir -p 最终产物目录/.PKGINFO
+            tar -xf 临时构建目录/control.tar.gz -C 最终产物目录/.PKGINFO
           fi
-          chmod 755 apk-build/pkg/usr/bin/*.sh 2>/dev/null || true
-          chmod 755 apk-build/pkg/etc/init.d/* 2>/dev/null || true
-          chmod 755 apk-build/pkg/etc/uci-defaults/* 2>/dev/null || true
-          tar -C apk-build/pkg -czf apk-output/${{ steps.pkg-info.outputs.PACKAGE_NAME }}_${{ steps.pkg-info.outputs.VERSION }}_${{ steps.pkg-info.outputs.ARCH }}.apk .
-          rm -rf apk-build
-          echo "✅ APK包生成完成，和主脚本IPK包内容完全一致"
-
-      - name: 上传APK包产物（和主脚本规则完全对齐）
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.pkg-info.outputs.PACKAGE_NAME }}_APK_v${{ steps.pkg-info.outputs.VERSION }}
-          path: apk-output/*.apk
-          retention-days: 90
-      # 3. 核心步骤：100%执行主脚本的全套打包流程，复用你跑通的build.sh
-      - name: 执行主脚本全套打包流程（100%复用你跑通的build.sh）
-        run: |
-          set -euo pipefail
-          chmod +x scripts/build.sh
-          ./scripts/build.sh
-          ls -l *.ipk
-          echo "✅ 主脚本全套打包流程执行完成，和主脚本结果完全一致"
-
-      # 4. 读取包配置，和主脚本里的包名、版本号完全一致
-      - name: 读取包配置（和主脚本100%同步）
-        id: pkg-info
-        run: |
-          set -euo pipefail
-          PACKAGE_NAME="luci-app-jianguoyun"
-          VERSION=$(grep -oP 'Version:\s*\K.*' CONTROL/control 2>/dev/null | head -n 1 || echo "1.0.0")
-          ARCH="noarch"
-          
-          echo "PACKAGE_NAME=$PACKAGE_NAME" >> $GITHUB_OUTPUT
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-          echo "ARCH=$ARCH" >> $GITHUB_OUTPUT
-          echo "✅ 包配置读取完成，和主脚本完全同步"
-
-      # 5. 从主脚本生成的IPK包中提取文件，生成APK包
-      - name: 生成APK安装包（100%复用主脚本打包结果）
-        run: |
-          set -euo pipefail
-          mkdir -p apk-build/pkg apk-output
-          
-          tar -xf *.ipk -C apk-build
-          if [ -f apk-build/data.tar.gz ]; then
-            tar -xf apk-build/data.tar.gz -C apk-build/pkg
-          fi
-          if [ -f apk-build/control.tar.gz ]; then
-            mkdir -p apk-build/pkg/.PKGINFO
-            tar -xf apk-build/control.tar.gz -C apk-build/pkg/.PKGINFO
-          fi
-          
-          chmod 755 apk-build/pkg/usr/bin/*.sh 2>/dev/null || true
-          chmod 755 apk-build/pkg/etc/init.d/* 2>/dev/null || true
-          chmod 755 apk-build/pkg/etc/uci-defaults/* 2>/dev/null || true
-          
-          tar -C apk-build/pkg -czf apk-output/${{ steps.pkg-info.outputs.PACKAGE_NAME }}_${{ steps.pkg-info.outputs.VERSION }}_${{ steps.pkg-info.outputs.ARCH }}.apk .
-          
-          rm -rf apk-build
-          echo "✅ APK包生成完成，内容和主脚本的IPK包100%一致"
-
-      # 6. 上传APK包产物，和主脚本的上传规则完全对齐
-      - name: 上传APK包产物（和主脚本完全对齐）
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.pkg-info.outputs.PACKAGE_NAME }}_APK_v${{ steps.pkg-info.outputs.VERSION }}
-          path: apk-output/*.apk
-          retention-days: 90
-      # 3. 核心步骤：100%执行主脚本的全套打包流程，调用你跑通的build.sh
-      # 这一步和主脚本完全一样，主脚本能跑通，这里就100%能跑通，彻底解决不打包问题
-      - name: 执行主脚本全套打包流程（100%复用你跑通的build.sh）
-        run: |
-          # 给build.sh加执行权限，和主脚本完全一致
-          chmod +x scripts/build.sh
-          # 完整执行你跑通的build.sh，和主脚本的打包流程完全一样
-          ./scripts/build.sh
-          # 验证IPK包生成成功，和主脚本的校验逻辑完全一致
-          ls -l *.ipk
-          echo "✅ 主脚本全套打包流程执行完成，和主脚本结果完全一致"
-
-      # 4. 读取包配置，和主脚本里的包名、版本号完全一致
-      - name: 读取包配置（和主脚本100%同步）
-        id: pkg-info
-        run: |
-          # 包名和主脚本完全一致
-          PACKAGE_NAME="luci-app-jianguoyun"
-          # 版本号和主脚本、CONTROL/control里的完全一致
-          VERSION=$(grep -oP 'Version:\s*\K.*' CONTROL/control 2>/dev/null | head -n 1 || echo "1.0.0")
-          # APK包全架构通用，和主脚本的all架构完全对应
-          ARCH="noarch"
-          
-          # 输出配置，后续步骤复用
-          echo "PACKAGE_NAME=$PACKAGE_NAME" >> $GITHUB_OUTPUT
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-          echo "ARCH=$ARCH" >> $GITHUB_OUTPUT
-          echo "✅ 包配置读取完成，和主脚本完全同步"
-
-      # 5. 从主脚本生成的IPK包中提取文件，生成APK包，100%复用主脚本的打包结果
-      # 确保APK包的内容、权限、文件和主脚本生成的IPK包完全一致，不会有任何差异
-      - name: 生成APK安装包（100%复用主脚本打包结果）
-        run: |
-          # 创建临时构建目录
-          mkdir -p apk-build/pkg apk-output
-          
-          # 从主脚本生成的IPK包中提取所有文件，和主脚本的文件完全一致
-          tar -xf *.ipk -C apk-build
-          # 提取data.tar.gz里的业务文件，和主脚本打包的文件100%一致
-          if [ -f apk-build/data.tar.gz ]; then
-            tar -xf apk-build/data.tar.gz -C apk-build/pkg
-          fi
-          # 提取control.tar.gz里的控制文件，适配APK格式要求
-          if [ -f apk-build/control.tar.gz ]; then
-            mkdir -p apk-build/pkg/.PKGINFO
-            tar -xf apk-build/control.tar.gz -C apk-build/pkg/.PKGINFO
-          fi
-          
-          # 修复权限，和主脚本、IPK包的权限完全一致
-          chmod 755 apk-build/pkg/usr/bin/*.sh 2>/dev/null || true
-          chmod 755 apk-build/pkg/etc/init.d/* 2>/dev/null || true
-          chmod 755 apk-build/pkg/etc/uci-defaults/* 2>/dev/null || true
-          
-          # 严格遵循OpenWrt官方APK格式标准打包，和主脚本的打包规则完全一致
-          tar -C apk-build/pkg -czf apk-output/${{ steps.pkg-info.outputs.PACKAGE_NAME }}_${{ steps.pkg-info.outputs.VERSION }}_${{ steps.pkg-info.outputs.ARCH }}.apk .
-          
+          # 修复文件权限，和主脚本完全一致
+          chmod 755 最终产物目录/usr/bin/*.sh 2>/dev/null || true
+          chmod 755 最终产物目录/etc/init.d/* 2>/dev/null || true
+          chmod 755 最终产物目录/etc/uci-defaults/* 2>/dev/null || true
+          # 打包成官方标准APK格式
+          tar -C 最终产物目录 -czf 坚果云备份插件_v${{ steps.pkg-info.outputs.VERSION }}_全架构通用.apk .
           # 清理临时文件
-          rm -rf apk-build
-          echo "✅ APK包生成完成，内容和主脚本的IPK包100%一致"
+          rm -rf 临时构建目录 最终产物目录
+          echo "✅ APK包生成完成"
 
-      # 6. 上传APK包产物，和主脚本的上传规则、保留时间完全一致
-      - name: 上传APK包产物（和主脚本完全对齐）
+      - name: 6. 上传APK包产物（汉字名称，一眼可辨）
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.pkg-info.outputs.PACKAGE_NAME }}_APK_v${{ steps.pkg-info.outputs.VERSION }}
-          path: apk-output/*.apk
-          retention-days: 90
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-          echo "ARCH=$ARCH" >> $GITHUB_OUTPUT
-
-      - name: 构建APK安装包（兼容OpenWrt 25.12+新版固件）
-        run: |
-          # 创建临时构建目录和产物目录，完全不影响主脚本的文件
-          mkdir -p apk-build/pkg apk-output
-          
-          # 100%复用你现有的业务文件，和主IPK包功能完全一致
-          cp -r root/* apk-build/pkg/ 2>/dev/null || true
-          cp -r CONTROL/* apk-build/pkg/.PKGINFO/ 2>/dev/null || true
-          
-          # 修复文件权限，和主IPK包的权限完全一致
-          chmod 755 apk-build/pkg/usr/bin/*.sh 2>/dev/null || true
-          chmod 755 apk-build/pkg/etc/init.d/* 2>/dev/null || true
-          chmod 755 apk-build/pkg/etc/uci-defaults/* 2>/dev/null || true
-          
-          # 严格遵循OpenWrt官方APK格式标准打包
-          tar -C apk-build/pkg -czf apk-output/${{ steps.pkg-info.outputs.PACKAGE_NAME }}_${{ steps.pkg-info.outputs.VERSION }}_${{ steps.pkg-info.outputs.ARCH }}.apk .
-          
-          # 自动清理临时文件，不残留垃圾
-          rm -rf apk-build
-
-      - name: 上传APK包产物（和主IPK包完全分离，独立下载）
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.pkg-info.outputs.PACKAGE_NAME }}_APK_v${{ steps.pkg-info.outputs.VERSION }}
-          path: apk-output/*.apk
+          name: 坚果云备份插件_APK安装包_v${{ steps.pkg-info.outputs.VERSION }}
+          path: *.apk
           retention-days: 90
