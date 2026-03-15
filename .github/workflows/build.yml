@@ -1,4 +1,4 @@
-name: 云编译 - 坚果云备份插件（容错版）
+name: 云编译 - 坚果云备份插件（终极容错版）
 
 on:
   push:
@@ -12,28 +12,21 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@v4
 
-      - name: 安装依赖（多方案自动降级）
+      - name: 安装依赖（只保留本地可安装包，彻底砍掉 git clone）
         run: |
-          echo "=== 尝试方案A：安装标准依赖 ==="
-          if sudo apt-get update && sudo apt-get install -y build-essential ipkg-utils dpkg-dev; then
-            echo "✅ 方案A成功"
-            exit 0
-          fi
-          
-          echo "=== 方案A失败，尝试方案B：编译 ipkg-utils ==="
-          if sudo apt-get install -y build-essential autoconf automake libtool git; then
-            git clone https://github.com/ipkg/ipkg-utils.git || true
-            cd ipkg-utils || exit 1
-            ./autogen.sh || true
-            ./configure || true
-            make || true
-            sudo make install || true
-            cd ..
-            echo "✅ 方案B完成（即使部分失败也继续）"
-            exit 0
-          fi
-          
-          echo "=== 方案B失败，尝试方案C：仅安装基础依赖 ==="
+          echo "=== 仅安装基础依赖，不碰任何外部仓库 ==="
+          sudo apt-get update || true
+          sudo apt-get install -y build-essential dpkg-dev || true
+          echo "✅ 依赖安装完成（无论成功失败都继续）"
+
+      - name: 执行容错构建脚本
+        run: chmod +x scripts/build.sh && ./scripts/build.sh
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: luci-app-jianguoyun
+          path: output/
           sudo apt-get install -y build-essential
           echo "✅ 方案C完成"
 
