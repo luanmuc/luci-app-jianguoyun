@@ -1,0 +1,10 @@
+#!/bin/sh
+set -euo pipefail
+
+# 开发文档：卸载前停止服务，清理定时任务
+/etc/init.d/jianguoyun stop 2>/dev/null || true
+/etc/init.d/jianguoyun disable 2>/dev/null || true
+rm -rf /etc/cron.d/jianguoyun 2>/dev/null || true
+killall -9 jianguoyun-core.sh 2>/dev/null || true
+
+exit 0
