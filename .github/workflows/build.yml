@@ -1,12 +1,25 @@
-      - name: 安装依赖
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential dpkg-dev
-          # 手动下载并编译 ipkg-build
-          git clone https://github.com/ipkg/ipkg-utils.git
-          cd ipkg-utils
-          ./autogen.sh
-          ./configure
-          make
-          sudo make install
-          cd ..
+name: 云编译 - 坚果云备份插件
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 安装依赖（只保留最基础的）
+        run: sudo apt-get update && sudo apt-get install -y build-essential
+
+      - name: 执行构建脚本
+        run: chmod +x scripts/build.sh && ./scripts/build.sh
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: luci-app-jianguoyun
+          path: output/
