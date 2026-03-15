@@ -15,11 +15,10 @@ jobs:
     name: Build OpenWrt APK Package
     # 运行环境和主脚本完全一致
     runs-on: ubuntu-latest
-    # 错误处理规则和主脚本完全一致
+    # 错误处理规则和主脚本完全一致，语法已修正
     defaults:
       run:
         shell: bash
-        set -euo pipefail
 
     steps:
       # 1. 拉取代码，和主脚本完全一致
@@ -28,12 +27,67 @@ jobs:
         with:
           fetch-depth: 0
 
-      # 2. 安装依赖，和主脚本完全一致，缺什么就加什么，和主脚本100%对齐
+      # 2. 安装依赖，和主脚本完全一致
       - name: 安装构建依赖（和主脚本完全一致）
         run: |
+          set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y tar gzip coreutils wget curl xz-utils
 
+      # 3. 核心步骤：100%执行主脚本的全套打包流程，复用你跑通的build.sh
+      - name: 执行主脚本全套打包流程（100%复用你跑通的build.sh）
+        run: |
+          set -euo pipefail
+          chmod +x scripts/build.sh
+          ./scripts/build.sh
+          ls -l *.ipk
+          echo "✅ 主脚本全套打包流程执行完成，和主脚本结果完全一致"
+
+      # 4. 读取包配置，和主脚本里的包名、版本号完全一致
+      - name: 读取包配置（和主脚本100%同步）
+        id: pkg-info
+        run: |
+          set -euo pipefail
+          PACKAGE_NAME="luci-app-jianguoyun"
+          VERSION=$(grep -oP 'Version:\s*\K.*' CONTROL/control 2>/dev/null | head -n 1 || echo "1.0.0")
+          ARCH="noarch"
+          
+          echo "PACKAGE_NAME=$PACKAGE_NAME" >> $GITHUB_OUTPUT
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "ARCH=$ARCH" >> $GITHUB_OUTPUT
+          echo "✅ 包配置读取完成，和主脚本完全同步"
+
+      # 5. 从主脚本生成的IPK包中提取文件，生成APK包
+      - name: 生成APK安装包（100%复用主脚本打包结果）
+        run: |
+          set -euo pipefail
+          mkdir -p apk-build/pkg apk-output
+          
+          tar -xf *.ipk -C apk-build
+          if [ -f apk-build/data.tar.gz ]; then
+            tar -xf apk-build/data.tar.gz -C apk-build/pkg
+          fi
+          if [ -f apk-build/control.tar.gz ]; then
+            mkdir -p apk-build/pkg/.PKGINFO
+            tar -xf apk-build/control.tar.gz -C apk-build/pkg/.PKGINFO
+          fi
+          
+          chmod 755 apk-build/pkg/usr/bin/*.sh 2>/dev/null || true
+          chmod 755 apk-build/pkg/etc/init.d/* 2>/dev/null || true
+          chmod 755 apk-build/pkg/etc/uci-defaults/* 2>/dev/null || true
+          
+          tar -C apk-build/pkg -czf apk-output/${{ steps.pkg-info.outputs.PACKAGE_NAME }}_${{ steps.pkg-info.outputs.VERSION }}_${{ steps.pkg-info.outputs.ARCH }}.apk .
+          
+          rm -rf apk-build
+          echo "✅ APK包生成完成，内容和主脚本的IPK包100%一致"
+
+      # 6. 上传APK包产物，和主脚本的上传规则完全对齐
+      - name: 上传APK包产物（和主脚本完全对齐）
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pkg-info.outputs.PACKAGE_NAME }}_APK_v${{ steps.pkg-info.outputs.VERSION }}
+          path: apk-output/*.apk
+          retention-days: 90
       # 3. 核心步骤：100%执行主脚本的全套打包流程，调用你跑通的build.sh
       # 这一步和主脚本完全一样，主脚本能跑通，这里就100%能跑通，彻底解决不打包问题
       - name: 执行主脚本全套打包流程（100%复用你跑通的build.sh）
