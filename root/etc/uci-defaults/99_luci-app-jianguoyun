@@ -1,0 +1,14 @@
+#!/bin/sh
+set -euo pipefail
+
+# 开发文档：安装后自动生成默认配置，不覆盖已有配置
+uci -q batch <<EOF
+set jianguoyun.global=jianguoyun
+set jianguoyun.global.enabled=0
+set jianguoyun.global.encrypt=1
+set jianguoyun.global.log_enable=1
+set jianguoyun.global.log_max_count=3
+commit jianguoyun
+EOF
+
+exit 0
