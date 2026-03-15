@@ -1,0 +1,17 @@
+#!/bin/sh
+set -euo pipefail
+
+# 开发文档：安装后自动初始化配置
+/etc/uci-defaults/99_luci-app-jianguoyun 2>/dev/null || true
+/etc/init.d/jianguoyun enable 2>/dev/null || true
+
+# 修复权限
+chmod 755 /usr/bin/jianguoyun-*.sh 2>/dev/null || true
+chmod 755 /etc/init.d/jianguoyun 2>/dev/null || true
+chmod 644 /etc/config/jianguoyun 2>/dev/null || true
+
+# 重启Luci生效
+/etc/init.d/uhttpd reload 2>/dev/null || true
+
+echo "✅ 坚果云备份插件安装完成，版本：$(cat /VERSION_NOW 2>/dev/null || echo 3.1)"
+exit 0
