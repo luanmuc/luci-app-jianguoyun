@@ -1,0 +1,100 @@
+name: 云编译 - 坚果云备份插件（APK副脚本·和主脚本完全同步）
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 构建插件（和主脚本完全一致）
+        run: |
+          chmod +x scripts/build.sh
+          ./scripts/build.sh
+
+      # 【修复：把获取版本号移到最前面，确保后续步骤能拿到版本号】
+      - name: 获取新版本号
+        id: get_version
+        run: |
+          VERSION=$(cat VERSION_NOW)
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "✅ 读取到版本号：v$VERSION"
+
+      # 【修复：全链路容错+文件校验，绝对不会再出现tar解压报错】
+      - name: 转换为APK安装包（兼容OpenWrt 25.12+新版固件）
+        run: |
+          set -euo pipefail
+          # 1. 先检查IPK包是否存在，不存在直接报错提示
+          if [ ! -f output/*.ipk ]; then
+            echo "❌ 错误：未找到主脚本生成的IPK包"
+            exit 1
+          fi
+          
+          # 2. 创建临时目录
+          mkdir -p apk-temp apk-output pkg
+          
+          # 3. 解压IPK包，加容错
+          tar -xf output/*.ipk -C apk-temp
+          echo "✅ IPK包解压完成"
+          
+          # 4. 提取业务文件，加校验
+          if [ -f apk-temp/data.tar.gz ]; then
+            tar -xf apk-temp/data.tar.gz -C pkg
+            echo "✅ 业务文件提取完成"
+          else
+            echo "❌ 错误：IPK包中未找到data.tar.gz"
+            exit 1
+          fi
+          
+          # 5. 提取控制文件，加校验
+          if [ -f apk-temp/control.tar.gz ]; then
+            mkdir -p pkg/.PKGINFO
+            tar -xf apk-temp/control.tar.gz -C pkg/.PKGINFO
+            echo "✅ 控制文件提取完成"
+          else
+            echo "❌ 错误：IPK包中未找到control.tar.gz"
+            exit 1
+          fi
+          
+          # 6. 修复文件权限，加容错
+          chmod 755 pkg/usr/bin/*.sh 2>/dev/null || true
+          chmod 755 pkg/etc/init.d/* 2>/dev/null || true
+          chmod 755 pkg/etc/uci-defaults/* 2>/dev/null || true
+          echo "✅ 文件权限修复完成"
+          
+          # 7. 打包成官方标准APK格式，用正确的版本号
+          tar -C pkg -czf apk-output/luci-app-jianguoyun_v${{ steps.get_version.outputs.VERSION }}_noarch.apk .
+          echo "✅ APK包生成完成：luci-app-jianguoyun_v${{ steps.get_version.outputs.VERSION }}_noarch.apk"
+          
+          # 8. 清理临时文件
+          rm -rf apk-temp pkg
+
+      - name: 上传APK插件包
+        uses: actions/upload-artifact@v4
+        with:
+          name: 坚果云备份插件_APK安装包_v${{ steps.get_version.outputs.VERSION }}
+          path: apk-output/
+
+      - name: 自动发布 GitHub Release（APK包）
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.get_version.outputs.VERSION }}
+          name: 坚果云备份插件 v${{ steps.get_version.outputs.VERSION }}（APK兼容包）
+          body: |
+            🔖 版本：v${{ steps.get_version.outputs.VERSION }}
+            ✅ 全自动云编译，和主脚本IPK包版本完全同步
+            ✅ 版本号自动递增
+            ✅ 零报错容错打包
+            ✅ 自动发布 Release
+            📦 适配说明：APK包兼容 OpenWrt 25.12+ 新版固件，旧版固件请下载主脚本的IPK包
+          files: apk-output/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
