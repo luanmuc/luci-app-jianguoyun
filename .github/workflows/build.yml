@@ -1,46 +1,49 @@
-name: 自动编译坚果云插件安装包
+name: Build luci-app-jianguoyun
 on:
   push:
-    branches: [ main ]
-  release:
-    types: [ published ]
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
   build:
-    name: 编译 OpenWrt ${{ matrix.version }} ${{ matrix.arch }} 架构
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        version: [ "23.05.5", "25.12.0" ]
-        arch:
-          - aarch64_cortex-a53
-          - arm_cortex-a7_neon-vfpv4
-          - mipsel_24kc
-          - x86_64
     steps:
-      - name: 检出代码
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: 初始化OpenWrt SDK编译环境
-        uses: openwrt/gh-action-sdk@main
-        env:
-          ARCH: ${{ matrix.arch }}-${{ matrix.version }}
-          FEEDNAME: packages_ci
-          PACKAGES: luci-app-jianguoyun
-          NO_REFRESH_CHECK: true
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ipkg-utils build-essential
 
-      - name: 上传编译完成的安装包
+      - name: Build IPK
+        run: |
+          BUILD_DIR=$(mktemp -d)
+          mkdir -p "${BUILD_DIR}/CONTROL"
+          cp -r ./root/* "${BUILD_DIR}/"
+
+          cat > "${BUILD_DIR}/CONTROL/control" << EOF
+Package: luci-app-jianguoyun
+Version: 3.1
+Architecture: all
+Section: luci
+Priority: optional
+Maintainer: luanmuc
+Description: Jianguoyun Backup Plugin for OpenWrt
+Depends: luci-base, curl, wget
+EOF
+
+          chmod 755 "${BUILD_DIR}/CONTROL"
+          find "${BUILD_DIR}" -type d -exec chmod 755 {} \;
+          find "${BUILD_DIR}" -name "*.sh" -exec chmod 755 {} \;
+          find "${BUILD_DIR}" -name "*.lua" -exec chmod 644 {} \;
+
+          mkdir -p output
+          ipkg-build -o root -g root "${BUILD_DIR}" output/
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: luci-app-jianguoyun-${{ matrix.version }}-${{ matrix.arch }}
-          path: bin/packages/${{ matrix.arch }}/packages_ci/*.ipk
-          if-no-files-found: error
-
-      - name: 发布安装包到Release
-        uses: softprops/action-gh-release@v2
-        if: github.event_name == 'release'
-        with:
-          files: bin/packages/${{ matrix.arch }}/packages_ci/*.ipk
-          fail_on_unmatched_files: true
+          name: luci-app-jianguoyun
+          path: output/
