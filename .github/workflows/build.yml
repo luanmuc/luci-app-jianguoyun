@@ -1,27 +1,45 @@
-name: 云编译 - 坚果云备份插件（终极版）
+name: 云编译 - 坚果云备份插件（全自动终极版）
+
 on:
   push:
     branches: [ main ]
   workflow_dispatch:
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
     steps:
       - name: 拉取代码
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # 允许提交新版本号
-      - name: 执行构建脚本
+
+      - name: 构建插件
         run: chmod +x scripts/build.sh && ./scripts/build.sh
-      - name: 提交新版本号
-        run: |
-          git config --global user.name "luanmuc"
-          git config --global user.email "luanmuc@users.noreply.github.com"
-          git add VERSION || true
-          git commit -m "Auto-increment version to $(cat VERSION)" || true
-          git push || true
-      - name: 上传产物
+
+      - name: 获取新版本号
+        id: get_version
+        run: echo "VERSION=$(cat VERSION_NOW)" >> "$GITHUB_OUTPUT"
+
+      - name: 上传插件包
         uses: actions/upload-artifact@v4
         with:
           name: luci-app-jianguoyun
           path: output/
+
+      - name: 自动发布 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.get_version.outputs.VERSION }}
+          name: 坚果云备份插件 v${{ steps.get_version.outputs.VERSION }}
+          body: |
+            🔖 版本：v${{ steps.get_version.outputs.VERSION }}
+            ✅ 全自动云编译
+            ✅ 版本号自动递增
+            ✅ 零报错容错打包
+            ✅ 自动发布 Release
+            📦 插件已打包完成，可直接下载安装
+          files: output/*.ipk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
