@@ -12,14 +12,13 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@v4
 
-      - name: 安装依赖（只保留本地可安装包，彻底砍掉 git clone）
+      - name: 安装依赖
         run: |
-          echo "=== 仅安装基础依赖，不碰任何外部仓库 ==="
           sudo apt-get update || true
           sudo apt-get install -y build-essential dpkg-dev || true
-          echo "✅ 依赖安装完成（无论成功失败都继续）"
+          echo "✅ 依赖安装完成"
 
-      - name: 执行容错构建脚本
+      - name: 执行构建脚本
         run: chmod +x scripts/build.sh && ./scripts/build.sh
 
       - name: 上传产物
@@ -27,13 +26,6 @@ jobs:
         with:
           name: luci-app-jianguoyun
           path: output/
-          sudo apt-get install -y build-essential
-          echo "✅ 方案C完成"
-
-      - name: 执行容错构建脚本
-        run: chmod +x scripts/build.sh && ./scripts/build.sh
-
-      - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
           name: luci-app-jianguoyun
