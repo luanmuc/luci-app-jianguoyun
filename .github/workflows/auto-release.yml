@@ -1,0 +1,77 @@
+name: 自动发布版本号+更新说明（完全独立，不碰核心打包脚本）
+# 仅当你手动发布Release时触发，日常push不运行，完全不影响主副脚本的双包打包
+on:
+  release:
+    types: [ published ]
+
+jobs:
+  auto-release:
+    name: 自动同步版本号+生成更新说明
+    runs-on: ubuntu-latest
+    steps:
+      - name: 拉取仓库代码
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 同步Release版本号到配置文件
+        id: pkg-info
+        run: |
+          # 从你发布的Release tag里读取版本号，比如tag是v1.0.0，版本号就是1.0.0
+          RELEASE_TAG=${{ github.ref_name }}
+          VERSION=${RELEASE_TAG#v}
+          PACKAGE_NAME="luci-app-jianguoyun"
+          
+          # 自动同步版本号到CONTROL/control文件，主副脚本打包时会自动复用
+          sed -i "s/Version:.*/Version: $VERSION/g" CONTROL/control
+          
+          # 输出配置到环境变量
+          echo "PACKAGE_NAME=$PACKAGE_NAME" >> $GITHUB_OUTPUT
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_OUTPUT
+          
+          # 提交版本号更新
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          git add CONTROL/control
+          git commit -m "release: 同步版本号 v$VERSION" || echo "版本号无变化，跳过提交"
+          git push
+          echo "✅ 版本号同步完成，主副脚本后续打包自动复用"
+
+      - name: 自动生成标准化更新说明
+        run: |
+          cat > RELEASE_NOTE.md << EOF
+          # luci-app-jianguoyun v${{ steps.pkg-info.outputs.VERSION }} 正式发布
+          发布时间：$(date +"%Y-%m-%d")
+          ## 适配说明
+          | 包格式 | 兼容固件版本 | 架构支持 |
+          |--------|--------------|----------|
+          | IPK包  | OpenWrt 18.06-24.10 旧版固件 | 全架构通用 |
+          | APK包  | OpenWrt 25.12+ 新版固件 | 全架构通用 |
+          ## 本次更新核心内容
+          1. 【稳定】修复已知问题，提升全流程运行稳定性
+          2. 【兼容】优化全机型全固件适配性，双包通用兼容
+          3. 【容错】完善全链路容错防砖机制，零风险备份恢复
+          4. 【性能】优化备份打包性能，降低系统资源占用
+          ## 下载说明
+          本次发布的IPK+APK双包，已自动附加在本Release的附件中，按需下载对应格式的安装包即可。
+          EOF
+
+      - name: 自动更新README版本信息
+        run: |
+          # 自动更新README里的最新版本号和发布时间，不修改其他内容
+          if [ -f README.md ]; then
+            sed -i "s/最新版本：v.*/最新版本：v${{ steps.pkg-info.outputs.VERSION }}/g" README.md
+            sed -i "s/发布时间：.*/发布时间：$(date +"%Y-%m-%d")/g" README.md
+            git add README.md
+            git commit -m "docs: 更新README版本信息 v${{ steps.pkg-info.outputs.VERSION }}" || echo "README无更新，跳过提交"
+            git push
+          fi
+
+      - name: 自动把更新说明填充到Release详情页
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: ${{ github.ref_name }}
+          body_path: RELEASE_NOTE.md
+          append_body: false
