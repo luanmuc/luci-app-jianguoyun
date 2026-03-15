@@ -1,4 +1,4 @@
-name: Build luci-app-jianguoyun
+name: 编译坚果云备份插件
 on:
   push:
     branches:
@@ -32,6 +32,7 @@ Priority: optional
 Maintainer: luanmuc
 Description: Jianguoyun Backup Plugin for OpenWrt
 Depends: luci-base, curl, wget
+
 EOF
 
           chmod 755 "${BUILD_DIR}/CONTROL"
