@@ -1,77 +1,97 @@
-name: 自动发布版本号+更新说明（完全独立，不碰核心打包脚本）
-# 仅当你手动发布Release时触发，日常push不运行，完全不影响主副脚本的双包打包
+name: 自动给IPK/APK Release添加更新说明
 on:
   release:
     types: [ published ]
 
 jobs:
-  auto-release:
-    name: 自动同步版本号+生成更新说明
+  add-note:
+    name: 自动生成对应更新说明
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - name: 拉取仓库代码
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: 同步Release版本号到配置文件
-        id: pkg-info
+      - name: 提取Release信息
+        id: info
         run: |
-          # 从你发布的Release tag里读取版本号，比如tag是v1.0.0，版本号就是1.0.0
-          RELEASE_TAG=${{ github.ref_name }}
-          VERSION=${RELEASE_TAG#v}
-          PACKAGE_NAME="luci-app-jianguoyun"
+          RELEASE_TAG=${{ github.event.release.tag_name }}
+          # 自动识别是IPK还是APK的Release，零错误识别
+          if [[ $RELEASE_TAG == apk-* ]]; then
+            PKG_TYPE="APK"
+            VERSION=${RELEASE_TAG#apk-v}
+          else
+            PKG_TYPE="IPK"
+            VERSION=${RELEASE_TAG#v}
+          fi
           
-          # 自动同步版本号到CONTROL/control文件，主副脚本打包时会自动复用
-          sed -i "s/Version:.*/Version: $VERSION/g" CONTROL/control
-          
-          # 输出配置到环境变量
-          echo "PACKAGE_NAME=$PACKAGE_NAME" >> $GITHUB_OUTPUT
+          echo "PKG_TYPE=$PKG_TYPE" >> $GITHUB_OUTPUT
           echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
           echo "RELEASE_TAG=$RELEASE_TAG" >> $GITHUB_OUTPUT
-          
-          # 提交版本号更新
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@github.com"
-          git add CONTROL/control
-          git commit -m "release: 同步版本号 v$VERSION" || echo "版本号无变化，跳过提交"
-          git push
-          echo "✅ 版本号同步完成，主副脚本后续打包自动复用"
 
-      - name: 自动生成标准化更新说明
+      - name: 生成对应更新说明
         run: |
-          cat > RELEASE_NOTE.md << EOF
-          # luci-app-jianguoyun v${{ steps.pkg-info.outputs.VERSION }} 正式发布
-          发布时间：$(date +"%Y-%m-%d")
-          ## 适配说明
-          | 包格式 | 兼容固件版本 | 架构支持 |
-          |--------|--------------|----------|
-          | IPK包  | OpenWrt 18.06-24.10 旧版固件 | 全架构通用 |
-          | APK包  | OpenWrt 25.12+ 新版固件 | 全架构通用 |
-          ## 本次更新核心内容
-          1. 【稳定】修复已知问题，提升全流程运行稳定性
-          2. 【兼容】优化全机型全固件适配性，双包通用兼容
-          3. 【容错】完善全链路容错防砖机制，零风险备份恢复
-          4. 【性能】优化备份打包性能，降低系统资源占用
-          ## 下载说明
-          本次发布的IPK+APK双包，已自动附加在本Release的附件中，按需下载对应格式的安装包即可。
-          EOF
-
-      - name: 自动更新README版本信息
-        run: |
-          # 自动更新README里的最新版本号和发布时间，不修改其他内容
-          if [ -f README.md ]; then
-            sed -i "s/最新版本：v.*/最新版本：v${{ steps.pkg-info.outputs.VERSION }}/g" README.md
-            sed -i "s/发布时间：.*/发布时间：$(date +"%Y-%m-%d")/g" README.md
-            git add README.md
-            git commit -m "docs: 更新README版本信息 v${{ steps.pkg-info.outputs.VERSION }}" || echo "README无更新，跳过提交"
-            git push
+          if [ "${{ steps.info.outputs.PKG_TYPE }}" = "IPK" ]; then
+            # IPK全版本通用包专属更新说明，与主脚本完全匹配
+            cat > RELEASE_NOTE.md << EOF
+            ---
+            ## 版本信息
+            - 版本号：v${{ steps.info.outputs.VERSION }}
+            - 发布时间：${{ github.event.release.published_at }}
+            - 安装包类型：OpenWrt IPK 全版本通用包
+            
+            ## 适配说明
+            | 兼容项 | 支持范围 |
+            |--------|----------|
+            | 固件版本 | OpenWrt 18.06-24.10、ImmortalWrt、iStoreOS、LEDE |
+            | 架构支持 | 全平台通用（x86/64、ARMv8、MT7981、MT7621等） |
+            | 依赖要求 | curl、tar、gzip、coreutils-sha256sum、ca-bundle |
+            
+            ## 本次更新核心内容
+            1. 【稳定】修复已知问题，优化备份恢复流程稳定性
+            2. 【兼容】优化全机型固件适配，解决部分环境运行异常
+            3. 【安全】完善防砖容错机制，操作失败自动回滚
+            4. 【性能】优化备份打包速度，降低系统资源占用
+            
+            ## 安装说明
+            1. 下载附件中的IPK安装包
+            2. 登录路由器后台，进入系统-软件包-上传软件包
+            3. 选择IPK文件上传安装，刷新页面即可看到插件入口
+            EOF
+          else
+            # OpenWrt APK新版固件包专属更新说明，与副脚本完全匹配
+            cat > RELEASE_NOTE.md << EOF
+            ---
+            ## 版本信息
+            - 版本号：v${{ steps.info.outputs.VERSION }}
+            - 发布时间：${{ github.event.release.published_at }}
+            - 安装包类型：OpenWrt APK 新版固件专用包
+            - 配套IPK版本：v${{ steps.info.outputs.VERSION }}
+            
+            ## 适配说明
+            | 兼容项 | 支持范围 |
+            |--------|----------|
+            | 固件版本 | OpenWrt 25.12+ 及以上新版官方固件 |
+            | 架构支持 | 全平台通用noarch包 |
+            | 依赖要求 | curl、tar、gzip、coreutils-sha256sum、ca-bundle |
+            
+            ## 本次更新核心内容
+            1. 【稳定】修复已知问题，和IPK版功能100%同步
+            2. 【兼容】适配OpenWrt 25.12+新版固件的APK插件标准
+            3. 【安全】完善防砖容错机制，操作失败自动回滚
+            4. 【性能】优化备份打包速度，降低系统资源占用
+            
+            ## 安装说明
+            1. 下载附件中的APK安装包
+            2. 登录路由器后台，进入系统-软件包-上传软件包
+            3. 选择APK文件上传安装，刷新页面即可看到插件入口
+            4. 注意：旧版OpenWrt固件请使用IPK安装包，本APK包不兼容
+            EOF
           fi
 
-      - name: 自动把更新说明填充到Release详情页
+      - name: 给Release添加更新说明
         uses: softprops/action-gh-release@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ steps.info.outputs.RELEASE_TAG }}
           body_path: RELEASE_NOTE.md
-          append_body: false
+          # 关键配置：true=追加说明，保留主副脚本原有发布内容；false=完全覆盖原有内容
+          append_body: true
