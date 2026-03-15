@@ -1,0 +1,2 @@
+# 坚果云自动备份任务，由插件自动管理
+# 0 3 * * * /usr/bin/jianguoyun-core.sh --backup >/dev/null 2>&1
