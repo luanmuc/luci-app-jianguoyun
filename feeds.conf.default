@@ -1,6 +1,0 @@
-# 坚果云插件官方软件源配置 V1.2.4_FULL_SYNC 最终版
-# OpenWrt 23.05 稳定版官方源，兼容性最佳
-src-git packages https://github.com/openwrt/packages.git;openwrt-23.05
-src-git luci https://github.com/openwrt/luci.git;openwrt-23.05
-src-git routing https://github.com/openwrt/routing.git;openwrt-23.05
-src-git telephony https://github.com/openwrt/telephony.git;openwrt-23.05
