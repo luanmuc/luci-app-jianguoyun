@@ -1,0 +1,15 @@
+{
+    "luci-app-jianguoyun": {
+        "description": "坚果云备份中心插件权限",
+        "read": {
+            "uci": [ "nutstore_backup" ]
+        },
+        "write": {
+            "uci": [ "nutstore_backup" ],
+            "file": {
+                "/usr/bin/nutstore-*.sh": [ "exec" ],
+                "/etc/init.d/nutstore-optimize-guard": [ "exec", "enable", "disable" ]
+            }
+        }
+    }
+}
