@@ -1,0 +1,12 @@
+#!/bin/sh
+set -e
+# 停止并禁用守护进程
+if [ -z "${IPKG_INSTROOT}" ]; then
+	/etc/init.d/nutstore-optimize-guard stop 2>/dev/null
+	/etc/init.d/nutstore-optimize-guard disable 2>/dev/null
+fi
+# 备份用户配置
+if [ -f "${IPKG_INSTROOT}/etc/config/nutstore_backup" ]; then
+	cp -f "${IPKG_INSTROOT}/etc/config/nutstore_backup" "/tmp/luci-app-nutstore-backup_config_backup.tar.gz"
+fi
+exit 0
